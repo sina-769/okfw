@@ -595,6 +595,7 @@ class AbschnittSources(KonfTest):
         self.assertEqual(fm["metadaten_geprueft"]["by"], "process:crossref")
         self.assertEqual(fm["crossref_hinweise"], ["retraction"])
 
+    @unittest.skipUnless(PANDOC, "pandoc fehlt: ohne APA-Block kein Platz darunter; den Hinweis selbst prüfen die Tests darüber")
     def test_hinweis_auch_ohne_eigene_vorlage(self):
         self.py(FAKE_FETCH)
         zeilen = self.text("sources/q9").split("\n")
