@@ -315,6 +315,20 @@ class QuellenUndRohquellen(RegelTest):
             ("claim_on_citation_only", self.Q1, "access: abstract", "access: citation", "concepts/k1"),
         ])
 
+    def test_citation_kernaussagen_fliesstext_ja_kasten_nein(self):
+        self.aendere(self.Q1, "access: abstract", "access: citation")
+        self.aendere(self.Q1, "- Aussage (Abstract)", "> [!todo] Erst nach Lektüre.\n> Zweite Zeile des Kastens.")
+        self.assertNotIn("citation_with_claims", self.lint_codes(self.Q1))
+        self.aendere(self.Q1, "## Relevanz", "[^x]: Fußnote am Ende eines Abschnitts\n\n## Relevanz")
+        self.assertNotIn("citation_with_claims", self.lint_codes(self.Q1))
+        self.aendere(self.Q1, "> Zweite Zeile des Kastens.", "> Zweite Zeile des Kastens.\n\nDie Studie zeigt X.")
+        self.assertIn("citation_with_claims", self.lint_codes(self.Q1))
+
+    def test_fussnote_samt_folgezeilen_ist_keine_aussage(self):
+        self.assertEqual(self.py(r"result = okfw.claim_lines('[^a]: def\n    Fortsetzung\n')"), [])
+        self.assertEqual(self.py(r"result = okfw.claim_lines('[^a]: def\n\n    Absatz\n\nAussage\n    Einzug\n')"),
+                         ["Aussage", "Einzug"])
+
     def test_undatiert_bewusst_vermerkt(self):
         self.aendere(self.Q1, "date: '2026-10-25'", "date: o. J.")
         self.assertNotIn("source_undated", self.lint_codes(self.Q1))
@@ -398,9 +412,32 @@ class Lizenzen(RegelTest):
 
     def test_lizenzangabe(self):
         self.tabelle([
-            ("license_missing", self.Q1, "license: {name: MIT, url: null}\n", ""),
+            ("license_missing", self.Q1, "license: {name: MIT, url: null}", "license: {name: null, url: null}"),
             ("license_unclassified", self.Q1, "name: MIT", "name: Sonderlizenz XY"),
         ])
+
+    def test_fehlende_lizenz_eine_meldung_je_profil(self):
+        self.aendere(self.Q1, "license: {name: MIT, url: null}\n", "")
+        lizenz = lambda: [(f["code"], f["message"]) for f in self.befunde(self.Q1)
+                          if "license" in f["code"] or "license" in f["message"]]
+        # Profil default: license empfohlen
+        befund = lizenz()
+        self.assertEqual(len(befund), 1, befund)
+        [(code, meldung)] = befund
+        self.assertEqual(code, "missing_recommended")
+        self.assertIn("lizenz <seite> --fetch", meldung)
+        # wie im Profil dokumentation: license Pflicht
+        self.toml('recommended = ["license"]', 'required = ["title", "description", "resource", "access", "status", '
+                  '"generated", "license"]\nrecommended = []')
+        self.toml('required = ["title", "description", "resource", "access", "status", "generated"]\n', "")
+        befund = lizenz()
+        self.assertEqual(len(befund), 1, befund)
+        [(code, meldung)] = befund
+        self.assertEqual(code, "missing_required")
+        self.assertIn("lizenz <seite> --fetch", meldung)
+        # Profil ohne license: license_missing
+        self.toml('"generated", "license"]', '"generated"]')
+        self.assertEqual([c for c, _ in lizenz()], ["license_missing"])
 
     def test_unklassifizierte_lizenz_mit_class_behoben(self):
         self.aendere(self.Q1, "name: MIT", "name: Sonderlizenz XY")

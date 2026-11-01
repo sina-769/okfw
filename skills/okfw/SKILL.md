@@ -18,7 +18,8 @@ Sitzung lesen. Sie nennt, was nur für diese Installation gilt (Projekte, Beglei
 Hintergrund), und gilt zusätzlich zu diesem Skill. Vorlage: `local.example.md`. **Ohne `local.md`**
 gilt allein dieser Skill: Webseiten und Dokumente ohne API nur mit ausdrücklicher Freigabe (die
 Aufgabe nennt die Seite oder das Dokument selbst, oder auf Nachfrage kommt ein Ja), Volltexte an
-Subagents oder externe Dienste nur nach `rechte`, keine Begleit-Skills voraussetzen.
+Subagents oder externe Dienste nur nach `rechte`. Begleit-Skills sind die des Plugins: `recherche` (Literatur suchen und
+aufnehmen), `lesen` (auswerten und gegenprüfen), `web-zugriff` (Webseiten ohne API).
 
 ## Ein Werkzeug für alle Wikis (verbindlich)
 
@@ -38,7 +39,7 @@ Subagents oder externe Dienste nur nach `rechte`, keine Begleit-Skills vorausset
 Werkzeug, aus dem Projektordner (sucht `wiki.toml` aufwärts):
 
 ```bash
-uv run --quiet ~/.claude/skills/okfw/okfw.py <befehl>
+uv run --no-config --quiet ~/.claude/skills/okfw/okfw.py <befehl>
 ```
 
 `~/.claude/skills/okfw` steht hier und unten für den Ordner dieser Datei. Als Plugin installiert
@@ -54,8 +55,12 @@ Ohne `wiki.toml` nichts schreiben; neues Wiki mit `init --profile default`.
 |---|---|---|
 | Rohquellen | `[paths] raw` (Pakete mit `manifest.json`) oder lokale Dateien mit `fulltext {path, sha256}` | nur `capture`; danach unveränderlich |
 | Bundle | `[wiki] bundle`, Unterordner je Typ | Claude, Seite für Seite |
-| Ereignisse | `[paths] events`, Standard `<bundle>/.events.jsonl` | nur anhängen: `event`, jeder Befehl, der Seiten oder Rohquellen schreibt (`rebuild` nicht), Hook |
+| Ereignisprotokoll | `[paths] events`, Standard `<bundle>/.events.jsonl` | nur anhängen: `event`, jeder Befehl, der Seiten oder Rohquellen schreibt (`rebuild` nicht), Hook |
 | Projektionen | jedes `index.md`, `log.md`, Exporte aus `[export]` | nur `rebuild` |
+
+Parallele Zweige: `init` trägt für Ereignisstrom und Projektionen `merge=union` in `.gitattributes` ein, bei einem
+bestehenden Wiki tut das `gitattributes`. Nach einem Merge `git merge --no-ff --no-commit <zweig>`, `rebuild`,
+`git add -u`, `git commit --no-edit`; der Kern liest Ereignisse nach Zeit und jede Zeile einmal.
 
 ## Goldene Regeln
 
@@ -77,11 +82,16 @@ Gilt in jedem Wiki und für alles, was aus dem Wiki in ein Produkt geht (Folie, 
 
 - **Keine Quelle aus dem Gedächtnis.** Metadaten kommen aus einer Literatur-API (Crossref, PubMed,
   Europe PMC, arXiv, DataCite, falls vorhanden ToolUniverse-MCP) oder aus dem Originaldokument. Bei
-  Literatur den Rückzugsstatus vor der Aufnahme prüfen, z. B. über Crossref (`updated-by`) oder, falls
-  vorhanden, ToolUniverse `Crossref_check_retraction`.
+  Literatur prüft `new source --doi` und `--pmid` den Rückzugsstatus selbst, vor dem Schreiben (Crossref `updated-by` und
+  `update-to`; PubMed der Publikationstyp „Retracted Publication“ und die Verweise `RetractionIn`, `ExpressionOfConcernIn`,
+  `ErratumIn`, `CorrectedandRepublishedIn`): bei Rückzug oder Bedenken Exit 3 und keine Karte, bei Korrektur und Netzfehler eine
+  Karte mit `rueckzug: {geprueft, via, ergebnis}`. `--trotz-rueckzug` nur auf ausdrückliche Bitte der Person.
 - **Fundweg festhalten.** Jede neue Quelle sagt, wie sie gefunden wurde:
   `new source … --fundweg suche --db pubmed --query '…'` (bzw. `modellvorschlag`, `material`,
-  `person`, `zitatverfolgung --fundweg-von <slug>`), nachträglich `fundweg <seite> --art …`. Hat Claude eine
+  `person`, `zitatverfolgung --fundweg-von <slug>`), nachträglich `fundweg <seite> --art …`; mit echtem Suchzeitpunkt
+  `--at … --by …`. Kommt die Quelle aus einer Recherche, übernimmt `new source --aus-lauf LAUF --kandidat N` (und `fundweg
+  <seite> --aus-lauf LAUF --kandidat N`) Kennung und alle Funde samt Zeitpunkt, Datenbank, Suchstring und Akteur aus
+  `kandidaten.json`, statt sie nachzubauen; eine andere Kennung als die der Karte lehnt der Kern ab (Exit 2). Hat Claude eine
   Quelle aus dem Modellwissen vorgeschlagen und erst danach bestätigt, heißt das ehrlich
   `modellvorschlag`. Suchstrings exakt übernehmen; was nicht protokolliert wurde, nicht nachbauen.
 - **Zahlen, Prozente, Studiendesign** nur aus Volltext, Originaldokument, Code oder eigener
@@ -101,7 +111,8 @@ Gilt in jedem Wiki und für alles, was aus dem Wiki in ein Produkt geht (Folie, 
 - **Jede Quellenkarte trägt `license: {name, url, checked, via}`.** Erst `lizenz <seite> --fetch`
   (Crossref, DataCite, Europe PMC, OpenAlex), sonst am Original (Lizenzhinweis im PDF, Impressum) prüfen und
   `lizenz <seite> --name … --url … --via originaldokument` setzen. `unknown` ist ehrlich und gültig,
-  gibt aber außer Kurzzitaten nichts frei.
+  gibt aber außer Kurzzitaten nichts frei. `--fetch` überschreibt nur `unknown` oder eine Lizenz ohne Namen; eine
+  benannte, nicht eingeordnete Lizenz bekommt eine Klasse (`--class`), keinen neuen Abruf.
 - **Was erlaubt ist, zeigt `rechte <seite>`:** je Aktion erlaubt, mit Auflage, nicht erlaubt oder erst
   fragen (Matrix je Lizenzklasse: [docs/konfiguration.md](docs/konfiguration.md#lizenzen-und-nutzungsrechte)).
   Eine erteilte Genehmigung steht mit Beleg als `rights:` auf der Karte.
@@ -127,8 +138,8 @@ Gilt in jedem Wiki und für alles, was aus dem Wiki in ein Produkt geht (Folie, 
 2. **Capture** – Quelle zuerst festhalten: `capture <slug> --url … --file … --license … --license-url …` (Paket; die Lizenz landet im Manifest, `new source --set raw_packet=raw/<slug>` übernimmt sie auf die Karte) oder `hash <pfad> --from URL` und den Block als `fulltext:` in die Karte. Downloads vorher in den Scratchpad, nie direkt in Rohquellen-Ordner. Vor dem Ablegen eines Volltexts die Lizenz klären (siehe unten).
 3. **Ingest** – Karte anlegen: `new source <slug> --title … --description … --access …` (mit `--csl datei.json` aus einer Literatur-API, setzt Titel, Kurzbeleg, APA-Block). Dann Konzepte, Entitäten, Synthesen: `new concept <slug> --title … --sources a,b`. Beidseitig verlinken.
 4. **Retro** – neue Erkenntnisse sofort als Seite oder Ergänzung mit Beleg; dauerhafte Antworten als `synthesis` bzw. `analysis`.
-5. **Lint** – vor Abschluss `lint` (0 Fehler), `rebuild` (oder der Stop-Hook; er meldet Lint-Fehler als kurze Zeile, blockiert aber nicht). `lint --summary` für große Wikis, `--json` für Maschinen.
-6. **Gegenprüfung** – vor einem Produkt aus dem Wiki (Folie, Kapitel, Beitrag) prüft ein zweiter Agent
+5. **Lint** – vor Abschluss `lint` (0 Fehler), `rebuild` (oder der Stop-Hook; er gibt Lint-Fehler an die Sitzung zurück, höchstens zweimal je Sitzung, danach als kurze Zeile). `lint --summary` für große Wikis, `--json` für Maschinen.
+6. **Gegenprüfung** (`/lesen --pruefen`) – vor einem Produkt aus dem Wiki (Folie, Kapitel, Beitrag) prüft ein zweiter Agent
    mit frischem Kontext und nur lesenden Werkzeugen jede belegte Aussage gegen die Rohquelle in `raw/`
    oder den `fulltext`-Block: Stimmt die Fundstelle, trägt die Quelle die Aussage, ist `access` ehrlich?
    Er ändert nichts und berichtet je Aussage. Der Hauptagent arbeitet die Befunde ein; `status: stable`
@@ -137,23 +148,28 @@ Gilt in jedem Wiki und für alles, was aus dem Wiki in ein Produkt geht (Folie, 
 Prüfung durch einen Menschen (nur auf ausdrückliche Bitte und mit deren Kennung):
 
 ```bash
-uv run --quiet ~/.claude/skills/okfw/okfw.py verify concepts/x --by human:<id> --status stable
+uv run --no-config --quiet ~/.claude/skills/okfw/okfw.py verify concepts/x --by human:<id> --status stable
 ```
+
+`verify <seite> --by <akteur> --status deprecated` (Seite überholt) darf jeder Akteur setzen, auch Claude mit dem Akteur
+aus `[wiki] actor`; die Seite fällt damit aus `no_footnotes` und aus „Zur Freigabe“.
 
 ## Befehle
 
 `status` · `lint [--strict] [--summary] [--json]` · `rebuild [--check]` · `new <typ> <slug> …` ·
-`capture <slug> --url --file` · `hash <pfad>` · `verify <seite>… --by … [--force]` · `event <art> <seite> [detail]` ·
+`capture <slug> --url --file` · `hash <pfad>` · `verify <seite>… --by … [--force]` · `event <ereignisart> <seite> [detail]` ·
 `body <seite> <datei|->` · `sources <seite> --add a,b | --remove c` · `init [--profile …]` · `fundweg <seite> --art …` · `rechte [<seite>] [--aktion …]` ·
-`lizenz <seite> --fetch | --name …` · `lizenz --missing --fetch [--dry-run]` · `dashboard [--out PFAD] [--oeffentlich] [--open]`. Optionen und
+`lizenz <seite> --fetch | --name …` · `lizenz --missing --fetch [--dry-run]` · `abbildung <name> --file x.svg` · `dashboard [--out PFAD] [--oeffentlich] [--open]` · `serve [--port N] [--no-open]`. Optionen und
 `wiki.toml`-Schlüssel: [docs/konfiguration.md](docs/konfiguration.md).
+
+`serve` startet dasselbe Dashboard lokal mit Bearbeiten (Inhalt, Eigenschaften, Freigabe, neue Karten, Modellvorschlag, Einstellungen), nur auf diesem Rechner, unter einem zufälligen Pfad und mit Token; Karten, Freigaben und Abbildungen schreibt allein der Kern, Akteur ist `human:<kennung>`; Einstellungen und Design schreibt der Server selbst. Die Dashboard-Datei zum Weitergeben bleibt eine Leseansicht ohne Bearbeitungscode. Einzelheiten: [docs/konfiguration.md](docs/konfiguration.md#bearbeiten-im-dashboard).
 
 ## Überblick als Dashboard
 
 `dashboard` schreibt in unter einer Sekunde eine einzelne HTML-Datei (Standard `build/wiki-dashboard.html`,
 ohne Netzabhängigkeiten) zum inhaltlichen Erkunden: Netzwerkgraph aller Seiten oder Schichtengraph
-(Spalten je Art mit Fäden, Crosswalk), Vorschau beim Zeigen, Karte mit der ganzen Seite per Klick,
-Übersichtsseiten je Unterart, Filter nach Art, Unterart, Lizenz und Fundweg, Farbe nach Art (oder Umfang),
+(Spalten je Typ mit Fäden, Crosswalk), Vorschau beim Zeigen, Karte mit der ganzen Seite per Klick,
+Übersichtsseiten je Unterart, Filter nach Typ, Unterart, Lizenz und Fundweg, Farbe nach Typ (oder Umfang),
 eine Tabelle und eine Leseansicht wie ein Blogartikel (Doppelklick), mit Belegen und
 Literaturverzeichnis nach APA 7, Lizenz, Nutzungsrechten und Fundweg je Quelle und Übersichtsseiten je
 Lizenzklasse und Fundweg. Mit `[scope]` in der `wiki.toml` engt ein Umschalter auf einen Umfang ein
@@ -164,19 +180,25 @@ Zusatz „– zuerst lesen“ (der gehört in den Root-Index).
 
 **Zum Verstehen eines Wikis** kommen dazu: ein **Lernpfad** aus den Seiten mit `[index] entry_tag`
 (Standard `einstieg`) in der Reihenfolge von `order`, mit „weiter/zurück“ in der Leseansicht;
-**Textdiagramme** (```` ```text ````, ASCII-Bäume) als lesbare Abbildung ohne Umbruch; ein **Glossar** aus
+**Textdiagramme** (```` ```text ````, ASCII-Bäume) als lesbare Abbildung ohne Umbruch und **Schaubilder** (SVG, siehe unten); ein **Glossar** aus
 Titel, `aliases` und `description` der Typen in `[dashboard] glossary` (Standard Konzepte und Entitäten);
 **Offene Stellen** mit allen `> ⚠️ **Widerspruch:**`, ausdrücklichen „zu prüfen“-Vermerken und `> [!todo]`
 (eingeklappt) und Sprung zur Fundstelle. Wer einen Lernpfad will, gibt den Einstiegsseiten das Schlagwort und
-`order`; Diagramme gehören als `text`-Block in die Seite (Mermaid ist nicht eingebettet).
+`order`; Diagramme gehören als `text`-Block oder als SVG-Schaubild in die Seite (Mermaid ist nicht eingebettet).
 **Bewusst nicht enthalten, in keinem Wiki, nicht wieder einführen:** Themenbereiche
 und Schlagwörter erscheinen nirgends im Dashboard (keine Kachel, keine Tabellenspalte, nicht unter
 „Kategorie“ oder „Farbe“, keine Angaben oder Übersichtsseiten an der Seite), keine Übersichtskästen unter
 dem Graphen, keine Kacheln „Verbindungen“ und „Quellenlage“. Kacheln gibt es nur für Seiten, Fundweg und
-Lizenz. Das Dashboard dient dem Verstehen, nicht der Taxonomie. Die Arten
+Lizenz. Das Dashboard dient dem Verstehen, nicht der Taxonomie. Die Typen
 stehen überall (Chips, Kacheln, Tabelle, Übersichten) wie die Spalten des Schichtengraphen von der
 Grundlage zum Querschnitt, unabhängig von der Reihenfolge in der `wiki.toml`. Einzelheiten:
 [docs/konfiguration.md](docs/konfiguration.md#dashboard).
+
+**Design.** `[dashboard] design = "design.css"` bettet eine CSS-Datei des Projekts nach der Vorlage ein (vor allem
+`:root`-Variablen, Liste in [docs/konfiguration.md](docs/konfiguration.md#design)); ohne den Schlüssel gilt eine vorhandene
+`design.css` im Projektordner. Alles, was Fremdes laden oder das Style-Element verlassen kann (`@import`, `url(` auf anderes
+als `#…` und `data:` für Schriften und Rasterbilder, `image-set(` und verwandte Funktionen, `</style`), lehnt der Kern ab
+(Exit 2 beim Bau, Lint `design_unsafe`).
 
 **Öffentliche Ausgabe.** `[scope]` blendet nur ein und aus, die Seiten bleiben in der Datei. Was nicht
 nach außen darf (OPSEC, z. B. eine interne Synthese), bekommt mit `[visibility]` in der `wiki.toml` das
@@ -187,6 +209,33 @@ zeigt alles und markiert solche Seiten mit „Intern“. Öffentliche Seiten sol
 verweisen; Lint meldet das als `visibility_leak`. Nur die öffentliche Datei weitergeben und vorher
 `lint` lesen.
 
+## Schaubilder
+
+Bilder im Wiki sind SVG-Dateien unter `<bundle>/abbildungen/<name>.svg`; sonst gibt es keine Bilder und kein Mermaid.
+`abbildung <name> --file x.svg` prüft die Datei, entfernt Skripte, Ereignis-Attribute, fremde Adressen und alles außerhalb
+einer Liste erlaubter Elemente und legt sie ab (über 200 KB, nicht UTF-8 oder ohne `viewBox`: Exit 2). Eingebunden wird sie so, mit der Unterschrift direkt darunter:
+
+```markdown
+![Titel](/abbildungen/name.svg)
+*Abb.: Was es zeigt. Eigene Darstellung nach Müller[^mueller].*
+```
+
+Die Unterschrift beginnt mit `*Abb.` und trägt eine Fußnote (Lint `figure_caption`). Eine Abbildung aus einer Quelle zu
+übernehmen ist „Abbildung oder Tabelle übernehmen“: vorher `rechte <quelle>`, und „übernommen“ in der Unterschrift löst
+`figure_rights` aus, solange das Recht nicht erlaubt ist. Das Dashboard bettet die bereinigte Abbildung inline ein; eine
+fehlende oder abgelehnte Datei meldet `figure_missing` (Fehler).
+
+## Modellrollen
+
+Wer Lesen, Gegenprüfen, Bearbeiten per Prompt und den Webabruf erledigt, legt `rollen.py` fest: je Rolle Harness
+(`sitzung`, `claude`, `opencode`, `direkt`, `container`), Anbieter und Modell, in Schichten von Werk bis zur `wiki.toml`. In der
+`wiki.toml` stehen `[rollen] daten` (Datenklasse des Wikis: `oeffentlich`, `intern`, `personenbezogen`) und `sperre`
+(Anbieter, an die nichts geht). Ist ein Anbieter für die Datenklasse nicht freigegeben, ist die Rolle gesperrt; Inhalte
+dürfen dann nicht an ihn gehen, auch nicht „nur zum Lesen“. Ein Worker bekommt nie Werkzeuge, Keys stehen in keiner Datei.
+`rollen.py auftrag` braucht die `wiki.toml` (`--wiki PFAD`, sonst aufwärts gesucht) und bricht ohne sie ab; nur `--ohne-wiki`
+läuft trotzdem, mit der strengsten Datenklasse `personenbezogen`. Einzelheiten:
+[docs/konfiguration.md](docs/konfiguration.md#modellrollen).
+
 ## Lint lesen
 
 - **Fehler** brechen OKF oder das Profil: kaputtes Frontmatter, `sources`-Eintrag ohne `resource`, Fußnote ohne `sources`-Eintrag, Frontmatter in Ordner-`index.md`, manipulierte Rohquelle, Pflichtfeld fehlt.
@@ -195,17 +244,18 @@ verweisen; Lint meldet das als `visibility_leak`. Nur die öffentliche Datei wei
 
 ## Hooks
 
-SessionStart-Status, Guard für Rohquellen/Ereignisse/Projektionen und die Felder `status` und `verified`,
-Ereignisprotokoll, Rebuild beim Stop. Alle vier wirken nur in Projekten mit `wiki.toml`; SessionStart und Stop
-nur, wenn sie im Projektordner liegt (Guard und post-edit suchen aufwärts ab der Zieldatei).
+SessionStart-Status, Guard für Rohquellen, Ereignisprotokoll, Projektionen und die Felder `status` und `verified`,
+Ereignisse und `generated` bei Write/Edit, Rebuild beim Stop mit Rückgabe der Lint-Fehler an die Sitzung. Alle vier wirken nur in Projekten mit `wiki.toml`; SessionStart und Stop
+suchen sie aufwärts ab dem Projektordner, Guard und post-edit aufwärts ab der Zieldatei.
 
 - **Als Plugin** (`claude plugin install okfw@okfw`): Die Hooks kommen mit dem Plugin
   (`hooks/hooks.json` im Plugin), im Projekt ist nichts einzutragen.
 - **Als Skill-Ordner** (`~/.claude/skills/okfw`): `hooks/settings.example.json` in die
   `.claude/settings.json` des Projekts übernehmen.
-- Bedienfehler (kaputte `wiki.toml`, `requires_core` neuer als der Kern, fehlendes `uv`, dies außer beim Guard) melden die
-  Hooks als eine Zeile; der Stop-Hook nennt dazu die Zahl der Lint-Fehler. Blockiert wird nichts außer Schreibzugriffen
-  auf geschützte Dateien.
+- Bedienfehler (kaputte `wiki.toml`, `requires_core` neuer als der Kern, fehlendes `uv`) melden die Hooks als eine Zeile;
+  ohne `uv` läuft der Guard gar nicht, der Schutz ist dann aus und der Sitzungsstart nennt es einmal; Bedienfehler halten nie etwas an. Blockiert werden nur Schreibzugriffe
+  auf geschützte Dateien und, höchstens zweimal je Sitzung und einmal je Abschluss, der Abschluss bei Lint-Fehlern (Befunde
+  je Seite mit Regelname); danach bleibt es bei einer Zeile mit der Zahl der Fehler. Freigaben setzt auch dann nur die Person.
 - Nicht beides zugleich, sonst laufen die Hooks doppelt und das Ereignisprotokoll schreibt jede
   Änderung zweimal.
 

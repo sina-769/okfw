@@ -1,0 +1,54 @@
+# Anbieter und Rollen ab Werk. Eigene Einstellungen stehen in ~/.config/okfw/einstellungen.toml, gesetzt über
+# `okfw.py serve` (Einstellungen) oder `rollen.py`. Modelle kommen von der Modellliste des Anbieters; modelle: Vorschläge, wenn kein Key da ist.
+# openai, anthropic: Endpunkt der jeweiligen API-Form; schluessel: Name im Schlüsselbund; schluessel_env: Umgebungsvariable.
+# daten: welche Datenklassen eines Wikis ([rollen] daten) an diesen Anbieter gehen dürfen.
+
+[anbieter.anthropic]
+name = "Anthropic"
+anthropic = "https://api.anthropic.com"
+schluessel = "anthropic-api-key"
+schluessel_env = "ANTHROPIC_API_KEY"
+daten = ["oeffentlich", "intern"]
+hinweis = "Über Claude Code ohne Key: Anmeldung oder Abo. Nur direkt braucht es einen Key."
+modelle = ["sonnet", "opus", "haiku"]
+
+[anbieter.openai]
+name = "OpenAI"
+openai = "https://api.openai.com/v1"
+schluessel = "openai-api-key"
+schluessel_env = "OPENAI_API_KEY"
+daten = ["oeffentlich", "intern"]
+
+[anbieter.openrouter]
+name = "OpenRouter"
+openai = "https://openrouter.ai/api/v1"
+schluessel = "openrouter-api-key"
+schluessel_env = "OPENROUTER_API_KEY"
+daten = ["oeffentlich", "intern"]
+hinweis = "Vermittelt an viele Anbieter; wohin die Daten gehen, hängt vom Modell ab."
+
+[anbieter.ollama]
+name = "Ollama (auf diesem Rechner)"
+openai = "http://localhost:11434/v1"
+daten = ["oeffentlich", "intern", "personenbezogen"]
+hinweis = "Die Daten verlassen den Rechner nicht. Modell vorher mit `ollama pull` holen."
+
+[rollen.lesen]
+harness = "sitzung"
+anbieter = "anthropic"
+modell = "sonnet"
+
+[rollen.gegenpruefen]
+harness = "sitzung"
+anbieter = "anthropic"
+modell = "opus"
+
+[rollen.bearbeiten]
+harness = "claude"
+anbieter = "anthropic"
+modell = "sonnet"
+
+[rollen.webabruf]
+harness = "container"
+anbieter = "anthropic"
+modell = "sonnet"

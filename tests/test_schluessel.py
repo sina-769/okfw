@@ -185,6 +185,20 @@ class AbschnittIndex(KonfTest):
         self.assertNotIn("k1.md", text)
         self.assertEqual(self.py("result = [p.id for p in wiki.learning_path()]"), ["concepts/k3"])
 
+    def test_order_als_text_und_unbrauchbar(self):
+        self.konzept("k1", "--tags", "einstieg", "--set", "order=10")
+        self.konzept("k2", "--tags", "einstieg", "--set", 'order="2"')
+        self.konzept("k3", "--tags", "einstieg", "--set", "order=abc")
+        self.konzept("k4", "--tags", "einstieg")
+        self.konzept("k5", "--set", "order=abc")
+        self.rebuild()
+        self.assertEqual(self.py("result = [p.id for p in wiki.learning_path()]"),
+                         ["concepts/k2", "concepts/k1", "concepts/k3", "concepts/k4"])
+        self.assertIn("order_invalid", self.lint_codes("concepts/k2"))
+        self.assertIn("order_invalid", self.lint_codes("concepts/k3"))
+        for sauber in ("k1", "k4", "k5"):
+            self.assertNotIn("order_invalid", self.lint_codes(f"concepts/{sauber}"))
+
     def test_areas_heading_und_unit(self):
         self.konzept("k1")
         self.setze("[index]", 'areas_heading = "Rubriken"', 'unit = "Karten"')
@@ -247,6 +261,12 @@ class AbschnittLog(KonfTest):
         self.setze("[log]", 'show_actor = true')
         self.rebuild()
         self.assertTrue(self.zeile_mit("wiki/log.md", "Erstellt").endswith("(claude-code/claude-opus-5-5)"))
+
+    def test_deprecate_heisst_ueberholt(self):
+        self.konzept("k1")
+        self.core("event", "deprecate", "concepts/k1", "Probe")
+        self.rebuild()
+        self.assertIn("* **Als überholt markiert**: [Konzept k1]", self.datei_lesen("wiki/log.md"))
 
     def test_labels(self):
         self.konzept("k1")
@@ -313,6 +333,53 @@ class AbschnittLint(KonfTest):
 # ------------------------------------------------------------------------------------------------ [export]
 
 
+class UnbekannteSchluessel(KonfTest):
+    def unbekannt(self) -> list[str]:
+        out = json.loads(self.core("lint", "--json", ok=None).stdout)
+        return [f["message"] for f in out["findings"] if f["code"] == "config_unknown" and f["path"] == "wiki.toml"]
+
+    def test_profil_ohne_unbekannte_schluessel(self):
+        self.assertEqual(self.unbekannt(), [])
+
+    def test_tippfehler_in_trust_und_lint_severity(self):
+        self.setze("[trust]", "signed_humen = true")
+        self.setze("[lint.severity]", 'path_not_kebap = "error"')
+        meldungen = self.unbekannt()
+        self.assertIn("[trust] signed_humen kennt der Kern nicht und wirkt nicht (gemeint: signed_human?)", meldungen)
+        self.assertIn("[lint.severity] path_not_kebap kennt der Kern nicht und wirkt nicht (gemeint: path_not_kebab?)",
+                      meldungen)
+        self.assertEqual(len(meldungen), 2)
+
+    def test_abschnitte_und_exporte(self):
+        self.toml_dazu('[visibilty]\nfield = "x"\n\n[export.ris]\npath = "a.ris"\n\n[export.csl]\npfad = "r.json"')
+        meldungen = self.unbekannt()
+        self.assertIn("[visibilty] kennt der Kern nicht und wirkt nicht (gemeint: visibility?)", meldungen)
+        self.assertIn("[export.ris] kennt der Kern nicht und wirkt nicht", meldungen)
+        self.assertIn("[export.csl] pfad kennt der Kern nicht und wirkt nicht", meldungen)
+
+    def test_bekannter_abschnitt_ohne_tabelle_ist_ein_bedienfehler(self):
+        toml = self.root / "wiki.toml"
+        for sec in ("taxonomy", "trust"):
+            text = toml.read_text(encoding="utf-8")
+            toml.write_text(f'{sec} = "x"\n' + re.sub(rf"^\[{sec}\]\n(?:[^\[].*\n|\n)*", "", text, flags=re.M),
+                            encoding="utf-8")
+            done = self.core("lint", ok=False)
+            self.assertEqual(done.returncode, 2)
+            self.assertIn(f"[{sec}] muss eine Tabelle sein", done.stderr)
+            self.assertNotIn("Traceback", done.stderr)
+            toml.write_text(text, encoding="utf-8")
+
+    def test_freie_tabellen_bleiben_ungeprueft(self):
+        self.setze("[enums]", 'eigenes_feld = ["a"]')
+        self.setze("[labels.eigenes_feld]", 'a = "A"')
+        self.setze("[rights.by]", 'abbildung = "ja"')
+        self.setze("[licenses.patterns]", '"beispiel" = "by"')
+        self.setze("[log]", 'labels = {create = "Neu"}')
+        self.toml_dazu('[types.notiz]\nfolder = "notizen"\ndefaults = {beliebig = 1}\n\n'
+                       '[types.notiz.todo.citation]\nkernaussagen = "> [!todo] x"')
+        self.assertEqual(self.unbekannt(), [])
+
+
 class AbschnittExport(KonfTest):
     def test_csl_field_und_path(self):
         self.setze("[export.csl]", 'field = "zotero"', 'path = "build/refs.json"')
@@ -325,6 +392,23 @@ class AbschnittExport(KonfTest):
         items = json.loads(self.datei_lesen("build/refs.json"))
         self.assertEqual([i["id"] for i in items], ["q1"])
         self.assertEqual(items[0]["title"], "Titel")
+
+    def test_csl_export_auch_ohne_csl_block(self):
+        self.setze("[export.csl]", 'path = "build/refs.json"')
+        self.quelle("q2", extra=("--set", "date=2021-03-04"))      # ohne csl-Block
+        self.assertNotIn("csl", self.fm("sources/q2"))
+        self.rebuild()
+        [item] = json.loads(self.datei_lesen("build/refs.json"))
+        self.assertEqual((item["id"], item["title"], item["URL"], item["issued"]),
+                         ("q2", "Quelle q2", "https://example.org/q2", {"date-parts": [[2021, 3, 4]]}))
+
+    def test_csl_export_id_ist_der_slug_und_steht_vorn(self):
+        self.setze("[export.csl]", 'path = "build/refs.json"')
+        self.quelle("q2", extra=("--set", "csl={type: book, id: eigen, title: Ein Titel}"))
+        self.rebuild()
+        [item] = json.loads(self.datei_lesen("build/refs.json"))
+        self.assertEqual(list(item)[:2], ["id", "type"])
+        self.assertEqual(item["id"], "q2")
 
     @unittest.skipUnless(PANDOC, "pandoc fehlt")
     def test_csl_lang(self):
@@ -441,6 +525,23 @@ class AbschnittVisibility(KonfTest):
         self.setze("[visibility]", 'derive = false')
         self.assertEqual(self.py("result = wiki.visibility()['sources/q1']"), ["oeffentlich", False])
 
+    def test_ohne_bekannte_werte_wird_ein_tippfehler_nicht_oeffentlich(self):
+        self.setze("[visibility]", 'field = "sichtbarkeit"', 'hidden = ["intern"]')   # weder [enums] noch default
+        self.konzept("offen")
+        self.konzept("vertippt", "--set", "sichtbarkeit=intren", titel="Tippfehlerseite")
+        out = json.loads(self.core("lint", "--json", ok=False).stdout)
+        befund = [f for f in out["findings"] if f["code"] == "visibility_values_missing"]
+        self.assertEqual([(f["severity"], f["path"]) for f in befund], [("error", "wiki.toml")])
+        self.assertIn("concepts/vertippt", self.py("result = sorted(wiki.hidden_ids())"))
+        self.assertNotIn("concepts/offen", self.py("result = sorted(wiki.hidden_ids())"))
+        done = self.core("dashboard", "--oeffentlich", ok=None)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("visibility_values_missing", done.stderr)
+        self.assertFalse((self.root / "build" / "wiki-dashboard-oeffentlich.html").exists())
+        self.setze("[visibility]", 'default = "oeffentlich"')
+        self.assertNotIn("visibility_values_missing", [f["code"] for f in json.loads(
+            self.core("lint", "--json", ok=None).stdout)["findings"]])
+
 
 # ------------------------------------------------------------------------------------------------ [fundweg], [sources]
 
@@ -467,7 +568,10 @@ wiki.fetch_source = lambda doi='', pmid='', arxiv='': (
     {'type': 'article-journal', 'title': 'Ein Aufsatz', 'author': [{'family': 'Muster', 'given': 'Max'}],
      'issued': {'date-parts': [[2020]]}, 'DOI': '10.1/x'},
     'https://doi.org/10.1/x', {'by': 'process:crossref', 'at': '2026-01-01T00:00:00Z'}, ['retraction'])
-args = okfw.build_parser().parse_args(['new', 'source', 'q9', '--doi', '10.1/x'])
+def offline(*args, **kwargs):
+    raise OSError('offline')
+okfw.http_json = okfw.http_bytes = offline   # die Rückzugsprüfung fragt PubMed; hier ohne Netz
+args = okfw.build_parser().parse_args(['new', 'source', 'q9', '--doi', '10.1/x', '--trotz-rueckzug'])
 okfw.cmd_new(wiki, args)
 """
 
@@ -490,6 +594,12 @@ class AbschnittSources(KonfTest):
         fm = self.fm("sources/q9")
         self.assertEqual(fm["metadaten_geprueft"]["by"], "process:crossref")
         self.assertEqual(fm["crossref_hinweise"], ["retraction"])
+
+    def test_hinweis_auch_ohne_eigene_vorlage(self):
+        self.py(FAKE_FETCH)
+        zeilen = self.text("sources/q9").split("\n")
+        apa = next(i for i, z in enumerate(zeilen) if z.startswith("> "))
+        self.assertEqual(zeilen[apa + 1:apa + 3], ["", "- ⚠ Crossref meldet: retraction – vor Nutzung ansehen."])
 
     def test_manual_csl_type(self):
         self.setze("[sources]", 'manual_csl_type = "legislation"')
@@ -569,14 +679,21 @@ class AbschnittDashboard(KonfTest):
 
 
 class AbschnittTaxonomie(KonfTest):
-    def test_field_und_label(self):
+    def test_field(self):
         self.konzept("k1", "--set", "domain=qm")
         self.konzept("k2", "--set", "thema=hygiene")
         domain = lambda: self.py("result = {n['id']: n['domain'] for n in wiki.dashboard_data()['nodes']}")
         self.assertEqual(domain(), {"concepts/k1": ["qm"], "concepts/k2": []})   # Standardfeld ist domain
-        self.setze("[taxonomy]", 'field = "thema"', 'label = "Rubrik"')
+        self.setze("[taxonomy]", 'field = "thema"')
         self.assertEqual(domain(), {"concepts/k1": [], "concepts/k2": ["hygiene"]})
-        self.assertEqual(self.py("result = wiki.dashboard_data()['domain_label']"), "Rubrik")
+
+    def test_label_gibt_es_nicht_mehr(self):
+        # bis 0.4.0 landete [taxonomy] label nur in den Dashboard-Daten, angezeigt wurde es nie
+        self.setze("[taxonomy]", 'label = "Rubrik"')
+        self.assertNotIn("domain_label", self.py("result = sorted(wiki.dashboard_data())"))
+        meldungen = [f["message"] for f in json.loads(self.core("lint", "--json", ok=None).stdout)["findings"]
+                     if f["code"] == "config_unknown"]
+        self.assertEqual(meldungen, ["[taxonomy] label kennt der Kern nicht und wirkt nicht"])
 
     def test_labels_je_feld(self):
         self.setze("[labels.domain]", 'qm = "Qualitätsmanagement"')
@@ -933,12 +1050,20 @@ class BefehlFundweg(KonfTest):
     def eintrag(self):
         return self.fm("sources/q1")["fundweg"]
 
+    def test_nicht_auf_konzeptseiten(self):
+        self.konzept("k1")
+        vorher = self.text("concepts/k1")
+        done = self.core("fundweg", "concepts/k1", "--art", "person", ok=False)
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("keine Quellenkarte", done.stderr)
+        self.assertEqual(self.text("concepts/k1"), vorher)
+
     def test_suche_mit_db_und_query(self):
-        done = self.core("fundweg", "sources/q1", "--art", "suche", "--db", "pubmed", "--query", "qualität AND apotheke")
+        done = self.core("fundweg", "sources/q1", "--art", "suche", "--db", "pubmed", "--query", "qualität AND bibliothek")
         self.assertIn("sources/q1: Fundweg Suche", done.stdout)
         eintrag = self.eintrag()
         self.assertEqual({k: eintrag[k] for k in ("art", "db", "query")},
-                         {"art": "suche", "db": "pubmed", "query": "qualität AND apotheke"})
+                         {"art": "suche", "db": "pubmed", "query": "qualität AND bibliothek"})
         self.assertEqual(eintrag["by"], "claude-code/claude-opus-5-5")
         self.assertRegex(eintrag["at"], r"^\d{4}-\d\d-\d\dT[\d:]+Z$")
         self.assertEqual(self.ereignisse()[-1]["detail"], "Fundweg: suche (pubmed)")
@@ -1025,6 +1150,33 @@ class BefehlLizenz(KonfTest):
         done = self.core("lizenz", "sources/q1", "--name", "X", "--class", "frei-erfunden", ok=False)
         self.assertEqual(done.returncode, 2)
         self.assertIn("--class: eine von", done.stderr)
+
+    def abruf(self, *args: str) -> dict:
+        """lizenz --fetch ohne Netz: lookup_license liefert CC BY 4.0; Ergebnis {Ausgabe, Lizenzen je Karte}."""
+        return self.py("import contextlib, io\n"
+                       "okfw.Wiki.lookup_license = lambda self, *ids: {'name': 'CC BY 4.0', 'url': "
+                       "'https://creativecommons.org/licenses/by/4.0/', 'checked': '2026-10-29', 'via': 'crossref (vor)'}\n"
+                       "out = io.StringIO()\n"
+                       "with contextlib.redirect_stdout(out):\n"
+                       f"    code = okfw.main(['--root', {str(self.root)!r}, 'lizenz', *{list(args)!r}])\n"
+                       "result = {'code': code, 'out': out.getvalue(), 'lic': {p.id: p.fm.get('license') for p in "
+                       "okfw.Wiki.load(root=wiki.root).source_cards()}}")
+
+    def test_fetch_laesst_benannte_lizenz_ohne_force_stehen(self):
+        self.quelle("q2", extra=("--set", "doi=10.1000/q2"))
+        self.core("lizenz", "sources/q1", "--name", "Hauseigene Nutzungsregel")     # benannt, nicht eingeordnet
+        self.core("lizenz", "sources/q1", "--url", "https://doi.org/10.1000/q1", "--name", "Hauseigene Nutzungsregel")
+        vorher = self.text("sources/q1")
+        einzeln = self.abruf("sources/q1", "--fetch")
+        self.assertIn("hat schon eine Lizenz (Hauseigene Nutzungsregel); --force", einzeln["out"])
+        alle = self.abruf("--missing", "--fetch")
+        self.assertIn("1 von 1 Lizenzen gefunden", alle["out"])                     # nur q2 mit unknown
+        self.assertIn("1 benannte Lizenz(en) ohne Klasse übersprungen (`lizenz <seite> --class …` oder `--force`)",
+                      alle["out"])
+        self.assertEqual(alle["lic"]["sources/q2"]["name"], "CC BY 4.0")
+        self.assertEqual(self.text("sources/q1"), vorher)
+        mit_force = self.abruf("sources/q1", "--fetch", "--force")
+        self.assertEqual(mit_force["lic"]["sources/q1"]["name"], "CC BY 4.0")
 
     def test_alias_license(self):
         self.core("license", "sources/q1", "--name", "Apache-2.0")

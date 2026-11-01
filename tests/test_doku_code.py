@@ -139,7 +139,7 @@ class SelbstreviewNullDreiNull(WikiTest):
         msgs = [f["message"] for f in out["findings"] if f["code"] == "projection_unavailable"]
         self.assertEqual(len(msgs), 1)
         # vorher hieß es mit pandoc und ohne Quellen „pandoc fehlt?“
-        self.assertIn("pandoc fehlt" if shutil.which("pandoc") is None else "keine Quellenkarte mit csl-Block", msgs[0])
+        self.assertIn("pandoc fehlt" if shutil.which("pandoc") is None else "keine Quellenkarte", msgs[0])
 
     def test_date_zaehlt_auch_mit_authors(self):
         self.core("new", "source", "q1", "--title", "Q1", "--description", "D", "--access", "citation",

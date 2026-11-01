@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "deny": ["Bash", "Glob", "Grep", "NotebookEdit", "Task", "Agent", "Skill"],
+    "disableBypassPermissionsMode": "disable"
+  },
+  "disableAllHooks": true,
+  "allowedMcpServers": [],
+  "enableAllProjectMcpServers": false
+}

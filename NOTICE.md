@@ -35,5 +35,10 @@ uv holt beide beim ersten Start des Kerns aus PyPI (Skriptkopf nach PEP 723 in `
 - **Open Knowledge Format v0.2** (GoogleCloudPlatform/knowledge-catalog, `okf/SPEC.md` @
   a8291a1a656669b8766fd4ff0f985505fb955e94, Apache-2.0): das Format der Wikis (Bundle, Frontmatter,
   `generated`/`verified`, Index- und Log-Dateien, Akteurskonvention). okfw implementiert die
-  Spezifikation; ihr Text ist nicht enthalten.
+  Spezifikation; ihr Text ist nicht enthalten, außer in den Bildern (unten).
 - **LLM-Wiki-Muster** von Andrej Karpathy, auf das sich pi-llm-wiki beruft.
+
+## Bilder und Testprotokolle
+
+Die Bilder unter `docs/` und die Protokolle unter `tests/` zeigen ein Beispiel-Wiki mit Auszügen aus den beiden
+Quellen oben: der OKF-Spezifikation (Apache-2.0) und dem README von pi-llm-wiki (MIT).

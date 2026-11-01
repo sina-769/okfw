@@ -1,12 +1,12 @@
 {
-  "description": "okfw: Wiki-Status beim Sitzungsstart, Schreibschutz für Rohquellen, Ereignisstrom, Projektionen und die Vertrauensfelder status und verified der Wiki-Seiten, Ereignisprotokoll und generated bei Write/Edit, Rebuild beim Stop mit kurzer Meldung bei Lint-Fehlern. Wirkt nur in Projekten mit wiki.toml.",
+  "description": "okfw: Wiki-Status beim Sitzungsstart, Schreibschutz für Rohquellen, Ereignisprotokoll, Projektionen und die Vertrauensfelder status und verified der Wiki-Seiten, Ereignisse und generated bei Write/Edit, Rebuild beim Stop; Lint-Fehler gehen an die Sitzung zurück (höchstens zwei Runden je Sitzung), danach kurze Meldung. Wirkt nur in Projekten mit wiki.toml.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --quiet --script \"${CLAUDE_PLUGIN_ROOT}/skills/okfw/hooks/okf_hook.py\" session-start 2>/dev/null || echo '{\"systemMessage\": \"okfw: Hook session-start ließ sich nicht starten (uv run --script)\"}'",
+            "command": "uv run --no-config --quiet --script \"${CLAUDE_PLUGIN_ROOT}/skills/okfw/hooks/okf_hook.py\" session-start 2>/dev/null || echo '{\"systemMessage\": \"okfw: Hook session-start ließ sich nicht starten (uv run --script)\"}'",
             "timeout": 20
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --quiet --script \"${CLAUDE_PLUGIN_ROOT}/skills/okfw/hooks/okf_hook.py\" guard",
+            "command": "uv run --no-config --quiet --script \"${CLAUDE_PLUGIN_ROOT}/skills/okfw/hooks/okf_hook.py\" guard",
             "timeout": 10
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --quiet --script \"${CLAUDE_PLUGIN_ROOT}/skills/okfw/hooks/okf_hook.py\" post-edit 2>/dev/null || echo '{\"systemMessage\": \"okfw: Hook post-edit ließ sich nicht starten (uv run --script)\"}'",
+            "command": "uv run --no-config --quiet --script \"${CLAUDE_PLUGIN_ROOT}/skills/okfw/hooks/okf_hook.py\" post-edit 2>/dev/null || echo '{\"systemMessage\": \"okfw: Hook post-edit ließ sich nicht starten (uv run --script)\"}'",
             "timeout": 20
           }
         ]
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --quiet --script \"${CLAUDE_PLUGIN_ROOT}/skills/okfw/hooks/okf_hook.py\" stop 2>/dev/null || echo '{\"systemMessage\": \"okfw: Hook stop ließ sich nicht starten (uv run --script)\"}'",
+            "command": "uv run --no-config --quiet --script \"${CLAUDE_PLUGIN_ROOT}/skills/okfw/hooks/okf_hook.py\" stop 2>/dev/null || echo '{\"systemMessage\": \"okfw: Hook stop ließ sich nicht starten (uv run --script)\"}'",
             "timeout": 60
           }
         ]

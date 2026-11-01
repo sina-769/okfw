@@ -7,9 +7,12 @@ SKILL.md, README.md oder docs/konfiguration.md trifft den Namen; „berührt“:
 nennt ihn so, wie ein Test ihn benutzt. Textsuche, deterministisch, ohne Netz und ohne Modell.
 """
 
+import json
+import subprocess
 import unittest
 
 from . import selbstreview
+from .hilfe import CORE, HEADER, SKILL, UV, clean_env
 
 DOKU = ("skill", "readme", "konf")   # CHANGELOG zählt nicht als Doku eines Verhaltens
 
@@ -54,6 +57,17 @@ class Abdeckung(unittest.TestCase):
             self.pruefe("schluessel", k["name"], "im Code", k["im_code"])
             self.pruefe("schluessel", k["name"], "doku", self.doku(k))
             self.pruefe("schluessel", k["name"], "test", bool(k["tests"]))
+
+    @unittest.skipIf(UV is None, "uv fehlt im PATH")
+    def test_config_unknown_kennt_dieselben_schluessel(self):
+        """Lint config_unknown liest die bekannten Schlüssel aus dem Kern (known_config_keys); sie decken sich mit
+        dem, was der Selbstreview aus DEFAULT_CONFIG und den Lesezugriffen findet."""
+        script = (HEADER + f"import json, sys\nsys.path.insert(0, {str(SKILL)!r})\nimport okfw\n"
+                  "print(json.dumps(sorted(okfw.known_config_keys())))\n")
+        done = subprocess.run([UV, "run", "--quiet", "--script", "-"], input=script, capture_output=True, text=True,
+                              env=clean_env(), cwd=CORE.parent, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout), sorted(k["name"] for k in self.inv["schluessel"]))
 
     def test_hooks(self):
         for h in self.inv["hooks"]:

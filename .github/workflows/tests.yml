@@ -1,5 +1,5 @@
 # Tests bei jedem Pull Request und auf main. Ohne Netzzugriffe der Tests selbst, ohne Token;
-# uv lädt nur die Abhängigkeiten der Skripte (pyyaml, markdown). Nachbau und Selbstreview bleiben Release-Schritte.
+# uv lädt nur die Abhängigkeiten der Skripte (pyyaml, markdown). Nachbau und volle Prüfung laufen außerhalb.
 name: tests
 
 on:
@@ -19,4 +19,5 @@ jobs:
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v7
-      - run: uv run python -m unittest
+      - run: uv run --with pyyaml --with markdown python -m unittest
+      - run: uv run --with pyyaml --with markdown python -I skills/web-zugriff/scripts/tests/test_pruefung.py   # ohne Docker; container_tests.py braucht Docker und läuft nicht in CI

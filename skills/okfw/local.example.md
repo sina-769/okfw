@@ -27,7 +27,7 @@ Vorlage für `local.md` neben `SKILL.md`. Kopieren, ausfüllen, nicht benötigte
 
 ## Begleit-Skills
 
-<!-- Skills für Recherche, Aufnahme, Lesen, Gegenprüfung, falls vorhanden. -->
+<!-- Weitere Skills neben recherche, lesen und web-zugriff aus dem Plugin, falls vorhanden. -->
 
 ## Altbestand
 

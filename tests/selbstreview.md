@@ -1,4 +1,4 @@
-# Selbstreview vor einem Release
+# Selbstreview
 
 Ein Wegwerf-Wiki über okfw selbst, mit okfw gebaut, macht sichtbar, wo Doku, Code und Tests auseinanderlaufen.
 Es bleibt unter `.nachbau/` (git-ignoriert); ins Repo kommt nur der Bericht
@@ -6,10 +6,9 @@ Es bleibt unter `.nachbau/` (git-ignoriert); ins Repo kommt nur der Bericht
 Konzeptkarten Widersprüche als `> ⚠️ **Widerspruch:**` mit beiden Fundstellen führen und eine Synthese
 „Wo Doku und Code auseinanderlaufen“ bündelt.
 
-Tests bei jeder Änderung, Selbstreview mit Modell vor jedem Release. Den mechanischen Teil (Kartenliste und
-Lücken) prüft `tests/test_abdeckung.py` mit derselben Funktion `inventory()` bei jedem Testlauf, auch auf GitHub;
-Karten lesen, Widersprüche vermerken und gegenprüfen bleiben Release-Schritt. Reihenfolge: Tests,
-**Selbstreview**, Nachbau, Export (siehe README, „Release-Schritte“).
+Den mechanischen Teil (Kartenliste und Lücken) prüft `tests/test_abdeckung.py` mit derselben Funktion `inventory()`
+bei jedem Testlauf, auch auf GitHub. Karten lesen, Widersprüche vermerken und gegenprüfen gehören zur vollen Prüfung,
+die nur bei eigenem Anlass läuft (siehe README, „Release-Schritte“).
 
 ## 1. Wiki und erste Befundliste (mechanisch)
 
@@ -45,6 +44,11 @@ Auftrag an jeden Helfer:
   ergänzen), Sicherheit. Nichts ohne Fundstelle; Vermutungen als solche markieren.
 - Dazu: Begriffe, die an zwei Stellen verschieden heißen (Doku gegen Code, Doku gegen Doku).
 
+Was das Skript nicht ausliest, bekommt eigene Gruppen: `okfw_serve.py` (Routen, Statuscodes, Köpfe), `rollen.py` (Unterbefehle,
+Optionen, Exit-Codes, Sperren), `anbieter.toml`, `skills/recherche/scripts/api.py` und die Skills `recherche` und `lesen` (jeder
+Befehl und jede Option, die sie nennen, gegen den Code). Dafür stellt der Hauptagent den Stand mit `git archive <rev> plugins/okfw`
+bereit. Genau hier fallen Optionen, Felder und Befehle durchs mechanische Raster, die kein Doku-Eintrag erwähnt.
+
 Der Hauptagent prüft jede Fundstelle am Original unter `_stand/`, verwirft, was nicht trägt, und setzt die
 übrigen Befunde mit `body` in die Karten: je Widerspruch ein Vermerk
 
@@ -57,7 +61,7 @@ Karten, steht er auf beiden.
 
 ## 3. Gegenprüfung
 
-`/pruefen` mit dem Agenten `beleg-pruefer` (frisch, nur lesend) über alle Karten mit Widerspruchsvermerk und
+`/lesen --pruefen` mit dem Agenten `beleg-pruefer` (frisch, nur lesend) über alle Karten mit Widerspruchsvermerk und
 eine Stichprobe der übrigen. Befunde einarbeiten; Gegenprüfung mit `verify <seiten> --by <[wiki] actor> --note …`
 vermerken. Nie `--by human:…`: Das Wiki wird weggeworfen, freigegeben wird es nicht.
 

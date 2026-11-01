@@ -1,4 +1,4 @@
-#!/usr/bin/env -S uv run --quiet --script
+#!/usr/bin/env -S uv run --no-config --quiet --script
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["pyyaml>=6.0", "markdown>=3.5"]
@@ -11,28 +11,32 @@ Pflichtfelder, Ereignisort, Exporte). Ohne wiki.toml schreibt der Kern nichts.
 
   okfw.py status [--hook]
   okfw.py lint [--strict] [--json] [--summary]
-  okfw.py rebuild [--check] [--quiet | --hook]
+  okfw.py rebuild [--check] [--quiet | --hook [--befunde]]
   okfw.py new <typ> <slug> --title T [--description D] [--sources a,b] [--tags x,y]
                  [--access A] [--resource URI] [--csl DATEI|-] [--set feld=wert ...]
                  [--doi D | --pmid P | --arxiv A | --manuell --titel T --url U [--autor --jahr --csl-typ]]
-                 [--volltext PFAD [--von URL]] [--evidenz E] [--fundweg ART [--db --query] [--fundweg-von SLUG]]
+                 [--volltext PFAD [--von URL]] [--evidenz E] [--fundweg ART [--db --query] [--fundweg-von SLUG]
+                 [--at ZEIT] [--by AKTEUR]] [--aus-lauf LAUF --kandidat N] [--trotz-rueckzug]
                  (deutsche Optionen: --titel, --beschreibung, --quellen)
   okfw.py new-source <slug> …   (= new source <slug> …)
   okfw.py capture <slug> --url URL --file PFAD[=REPO-PFAD] [--file ...] [--commit SHA]
                  [--license NAME --license-url URL] [--note N]
   okfw.py hash <pfad> [--from URL]
   okfw.py verify <seite> [<seite> ...] --by human:<id> [--status stable] [--note N] [--force]
-  okfw.py event <art> <seite> [detail] [--by AKTEUR]
-  okfw.py body <seite> <datei|-> | --nachziehen [--detail D]
+  okfw.py event <ereignisart> <seite> [detail] [--by AKTEUR]
+  okfw.py body <seite> <datei|-> | --nachziehen [--neu] [--detail D]   (Seitenname hinter "--", wenn er mit "-" beginnt)
   okfw.py sources <seite> [--add a,ID=b] [--remove c]
   okfw.py init [--profile NAME]
   okfw.py fundweg <seite> --art suche|modellvorschlag|material|person|zitatverfolgung
                  [--db DB --query Q] [--von SLUG] [--at ZEIT] [--by AKTEUR] [--add]
+  okfw.py fundweg <seite> --aus-lauf LAUF --kandidat N [--add]
+  okfw.py abbildung <name> --file x.svg [--ersetzen]
   okfw.py rechte [<seite>] [--aktion abbildung] [--json]
   okfw.py lizenz <seite> --name N [--url U] [--class K] | --fetch [--force] | --missing --fetch [--dry-run]
   okfw.py dashboard [--out PFAD] [--oeffentlich] [--open]
+  okfw.py serve [--port N] [--no-open]   (Dashboard mit Bearbeiten, nur lokal; Modul okfw_serve.py)
 
-Globale Optionen: --config PFAD (sonst wiki.toml aufwärts ab cwd), --root DIR (Projektordner).
+Globale Optionen: --config PFAD (sonst wiki.toml aufwärts ab cwd), --root DIR (Projektordner = Ordner der wiki.toml).
 Als Bibliothek: Wiki.load(config=..., root=...) mit pages(), lint(), projections(),
 rebuild(), new_page(), capture(), verify(), append_event():
 
@@ -42,11 +46,15 @@ rebuild(), new_page(), capture(), verify(), append_event():
 import argparse
 import calendar
 import datetime as dt
+import difflib
 import hashlib
 import html
+import http.client
 import json
+import math
 import os
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -60,11 +68,12 @@ import urllib.request
 import webbrowser
 from collections import Counter
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 
 import yaml
 
-VERSION = "0.4.0"
+VERSION = "0.6.0"
 SKILL_DIR = Path(__file__).resolve().parent
 RESERVED = {"index.md", "log.md"}
 STATUS = ("draft", "stable", "deprecated")
@@ -92,6 +101,16 @@ DIAGRAM_PRE_RE = re.compile(r'<pre><code(?: class="([^"]*)")?>(.*?)</code></pre>
 BOX_DRAWING_RE = re.compile(r"[─-╿]")
 # ausdrücklicher Prüfvermerk: „zu prüfen“ am Blockanfang, in Anführungszeichen oder Klammern, nicht im Fließtext
 CHECK_RE = re.compile(r"^\W*zu prüfen\b|[„“”\"‚‘(\[]\s*zu prüfen\b|\bzu prüfen\s*[)\]“”\"‘’]", re.I)
+# Schaubilder: <bundle>/abbildungen/<name>.svg, eingebunden als ![Titel](/abbildungen/name.svg) und darunter *Abb. …*
+FIGURES_DIR = "abbildungen"
+FIGURE_SRC_RE = re.compile(r"^/abbildungen/([a-z0-9]+(?:-[a-z0-9]+)*)\.svg$")
+IMAGE_RE = re.compile(r"!\[([^\]\n]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+FIGURE_CAPTION_RE = re.compile(r"^\s*\*Abb\.")
+FIGURE_MAX_BYTES = 200 * 1024
+FIGURE_MAX_ELEMENTS = 5000
+FIGURE_MAX_EXPANSION = 20000   # Elemente nach dem Auflösen aller <use>: verschachteltes <use> wächst sonst exponentiell
+# Datenklassen eines Wikis ([rollen] daten); dieselben prüft rollen.py
+DATENKLASSEN = ("oeffentlich", "intern", "personenbezogen")
 
 DEFAULT_CONFIG = {
     "wiki": {"title": "Wiki", "bundle": "wiki", "actor": "claude-code/unknown", "okf_version": "0.2",
@@ -106,8 +125,9 @@ DEFAULT_CONFIG = {
     "types": {},
     "export": {},
     "dashboard": {"path": "build/wiki-dashboard.html", "auto": False, "public_path": "",
-                  "glossary": ["concept", "entity"]},   # Typen, deren Seiten ins Glossar kommen
-    "taxonomy": {"field": "domain", "label": "Themenbereich"},
+                  "glossary": ["concept", "entity"],   # Typen, deren Seiten ins Glossar kommen
+                  "design": ""},                       # CSS-Datei, die nach der Vorlage eingebettet wird; leer: design.css, falls vorhanden
+    "taxonomy": {"field": "domain"},   # Feld, das die Dashboard-Suche als Themenbereich mitliest
     "labels": {},
     "licenses": {"patterns": {}},     # weitere Muster: {"example.org" = "vorbehalten"}
     "rights": {},                     # Matrix überschreiben: [rights.vorbehalten] abbildung = "nein: …"
@@ -117,16 +137,25 @@ DEFAULT_CONFIG = {
     "fundweg": {"field": "fundweg"},
     # Freigabe: body auf einer stable-Seite setzt draft (die Freigabe gilt dem alten Inhalt)
     # signed_human: Lint human_unsigned; human: Kennung, die „Zur Freigabe“ im Dashboard vorbelegt (human:jdoe);
-    # check_command: Aufruf der Gegenprüfung für die Liste „Gegenprüfung ohne Prüfwert“ (z. B. /pruefen)
+    # check_command: Aufruf der Gegenprüfung für die Liste „Gegenprüfung ohne Prüfwert“ (z. B. /lesen --pruefen)
     "trust": {"edit_resets_stable": True, "signed_human": False, "human": "", "check_command": ""},
     # new source --doi/--pmid/--arxiv/--manuell: wohin Metadatenprüfung und Crossref-Hinweise gehen
     "sources": {"checked_field": "metadaten_geprueft", "updates_field": "crossref_hinweise",
-                "manual_csl_type": "document"},
+                "retraction_field": "rueckzug", "manual_csl_type": "document"},
+    # Modellrollen (rollen.py): Datenklasse des Wikis und gesperrte Anbieter; je Rolle eine freie Tabelle
+    # [rollen.lesen] harness, anbieter, modell, die rollen.py prüft
+    "rollen": {"daten": "", "sperre": []},
 }
 
 TYPE_DEFAULTS = {"folder": "", "label": "", "description": "", "required": [], "recommended": ["title", "description"],
                  "sections": [], "min_links": 2, "needs_footnotes": False, "stale_months": 0, "template": "",
-                 "defaults": {}, "todo": {}}
+                 "defaults": {}, "todo": {}, "subtype": ""}
+# Exporte, die der Kern schreibt, mit ihren Schlüsseln ([export.csl], [export.bibliography]); ohne Eintrag kein Export
+EXPORT_KEYS = {"csl": ("path", "field", "style", "lang"), "bibliography": ("path", "title")}
+# Abschnitte der wiki.toml mit Projektwerten als Schlüsseln (Feldnamen, Klassen): config_unknown prüft sie nicht.
+# Ebenso frei, weil unknown_config in bekannte Schlüssel nicht absteigt: [log] labels, [licenses.patterns] und
+# defaults und todo der Typen.
+FREE_TABLES = {"enums", "labels", "rights"}
 
 # Platzhalter für Kurzreferat und Kernaussagen neuer Quellenkarten je access; [types.source.todo.<access>] ersetzt sie.
 TODO_BY_ACCESS = {
@@ -144,7 +173,7 @@ CROSSREF_TYPES = {"journal-article": "article-journal", "proceedings-article": "
 
 LOG_LABELS = {
     "init": "Initialisierung", "bootstrap": "Bootstrap", "capture": "Quelle erfasst", "create": "Erstellt",
-    "creation": "Erstellt", "update": "Aktualisiert", "verify": "Verifiziert", "deprecate": "Als veraltet markiert",
+    "creation": "Erstellt", "update": "Aktualisiert", "verify": "Verifiziert", "deprecate": "Als überholt markiert",
     "delete": "Entfernt", "merge": "Zusammengeführt", "enrich": "Angereichert", "export": "Export", "note": "Notiz",
 }
 
@@ -158,6 +187,7 @@ SEVERITY = {
     "status_invalid": "error", "generated_invalid": "error", "verified_invalid": "error",
     "timestamp_invalid": "error", "actor_format": "warn", "stable_unverified": "warn", "stale": "warn",
     "verified_outdated": "warn",   # bei status stable error
+    "order_invalid": "warn",
     "human_without_check": "warn", "human_unsigned": "warn", "verified_unhashed": "info", "check_outdated": "info",
     "source_invalid": "error", "source_duplicate_id": "error", "source_missing": "error",
     "footnote_unsourced": "error", "footnote_undefined": "warn", "source_uncited": "info",
@@ -177,8 +207,12 @@ SEVERITY = {
     "license_missing": "warn", "license_unknown": "info", "license_unclassified": "info",
     "fulltext_rights": "warn", "fulltext_shared": "warn",
     # Umfang, Sichtbarkeit und Fundweg
-    "scope_missing": "warn", "visibility_leak": "warn",
+    "scope_missing": "warn", "visibility_leak": "warn", "visibility_values_missing": "error",
     "fundweg_missing": "info", "fundweg_incomplete": "warn", "fundweg_invalid": "error",
+    # Schaubilder
+    "figure_caption": "warn", "figure_missing": "error", "figure_rights": "warn",
+    # wiki.toml
+    "config_unknown": "warn", "rollen_unknown": "error", "design_unsafe": "error",
 }
 
 # Wie eine Quelle gefunden wurde; gemeinsames Vokabular aller Wikis.
@@ -255,20 +289,411 @@ RIGHT_VALUES = ("ja", "bedingt", "nein", "fragen")
 class WikiError(Exception):
     """Bedienfehler: fehlende Konfiguration, ungültiger Slug, vorhandene Datei …"""
 
+    exit_code = 2
+
+
+STEUERZEICHEN_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+class _Druckbar:
+    """Ausgabe ohne Steuerzeichen außer Tab und Zeilenumbruch: Titel und Lizenzen können aus einem fremden Wiki stammen."""
+
+    def __init__(self, strom):
+        self.strom = strom
+
+    def write(self, text):
+        return self.strom.write(STEUERZEICHEN_RE.sub(chr(0xFFFD), text))
+
+    def __getattr__(self, name):
+        return getattr(self.strom, name)
+
 
 class ConfigMissing(WikiError):
     """Keine wiki.toml: Hooks bleiben in solchen Ordnern still."""
+
+
+class RetractionFound(WikiError):
+    """Rückzug oder Bedenken zu einer Quelle gemeldet: keine Karte (Exit 3), außer mit --trotz-rueckzug."""
+
+    exit_code = 3
+
+
+class FigureError(Exception):
+    """Abbildung fehlt, oder die Bereinigung lehnt sie ab."""
+
+
+# ----------------------------------------------------------- Schaubilder (SVG) und Design (CSS)
+
+SVG_NS = "http://www.w3.org/2000/svg"
+XLINK_NS = "http://www.w3.org/1999/xlink"
+SVG_ELEMENTS = {"svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "text", "tspan",
+                "title", "desc", "defs", "linearGradient", "radialGradient", "stop", "marker", "clipPath", "use"}
+SVG_TEXT_ELEMENTS = {"text", "tspan", "title", "desc"}
+# Geometrie und Präsentation; kein class, kein on*, keine Animation. href nur auf use und Verläufen, nur als #…
+SVG_ATTRIBUTES = set("""
+    x y width height cx cy r rx ry x1 y1 x2 y2 fx fy fr points d viewBox preserveAspectRatio transform id
+    offset gradientUnits gradientTransform spreadMethod clipPathUnits markerWidth markerHeight markerUnits refX refY
+    orient dx dy rotate textLength lengthAdjust
+    fill fill-opacity fill-rule stroke stroke-width stroke-opacity stroke-linecap stroke-linejoin stroke-miterlimit
+    stroke-dasharray stroke-dashoffset opacity color stop-color stop-opacity clip-path clip-rule marker-start
+    marker-mid marker-end font-family font-size font-weight font-style font-variant text-anchor text-decoration
+    dominant-baseline alignment-baseline baseline-shift letter-spacing word-spacing writing-mode visibility display
+    style role aria-label aria-hidden href
+""".split())
+SVG_HREF_ELEMENTS = {"use", "linearGradient", "radialGradient"}
+# style nur mit dem, was eine Abbildung zeichnet: nichts, was sie aus ihrem Rahmen hebt (position, z-index, inset, width …)
+SVG_STYLE_PROPERTIES = set("""
+    fill fill-opacity fill-rule stroke stroke-width stroke-opacity stroke-linecap stroke-linejoin stroke-miterlimit
+    stroke-dasharray stroke-dashoffset paint-order vector-effect opacity color stop-color stop-opacity clip-path
+    clip-rule marker-start marker-mid marker-end font font-family font-size font-weight font-style font-variant
+    font-stretch text-anchor text-decoration dominant-baseline alignment-baseline baseline-shift letter-spacing
+    word-spacing writing-mode text-rendering shape-rendering visibility
+""".split())
+SVG_ID_RE = re.compile(r"[A-Za-z_][\w.-]*")
+SVG_URL_RE = re.compile(r"url\(\s*(['\"]?)([^)'\"]*)\1\s*\)", re.I)
+SVG_VIEWBOX_RE = re.compile(r"\s*-?[\d.]+(?:[\s,]+-?[\d.]+){3}\s*")
+SVG_NUMBER_RE = re.compile(r"\s*(\d+(?:\.\d+)?)(?:px)?\s*")
+# CSS-Funktionen, die Fremdes laden können, auch ohne url(
+CSS_LOADER_RE = re.compile(r"image-set\(|(?<![\w-])(?:src|image|cross-fade|element|paint)\(", re.I)
+# SVG kommt nur durch clean_svg auf die Seite, nicht als data: im Design
+CSS_DATA_RE = re.compile(r"data:(?:font/(?:woff2?|ttf|otf|sfnt|collection)"
+                         r"|application/(?:x-)?font-(?:woff2?|ttf|otf|sfnt)"
+                         r"|image/(?:png|jpeg|gif|webp|avif))[;,]", re.I)
+
+
+def svg_value_ok(value: str, style: bool = False) -> bool:
+    """Ein Attributwert, der nichts nachlädt und nichts ausführt: url(…) nur auf #id, keine Skript-Adressen, keine
+    CSS-Maskierung und kein CSS-Kommentar, die eine Adresse verstecken könnten."""
+    lower = value.lower()
+    if "\\" in value or "/*" in value or CSS_LOADER_RE.search(value):
+        return False
+    if any(not m.group(2).strip().startswith("#") for m in SVG_URL_RE.finditer(value)):
+        return False
+    if lower.count("url(") != len(SVG_URL_RE.findall(value)):
+        return False
+    if re.search(r"javascript:|(?<!\w)data:|vbscript:|expression\(|behavior\s*:|binding\s*:|[<>]", lower):
+        return False
+    return not (style and "@" in value)
+
+
+def svg_style(value: str) -> tuple[str, list[str]]:
+    """style auf die erlaubten Eigenschaften gekürzt: (neuer Wert, weggefallene Eigenschaften)."""
+    keep, dropped = [], []
+    for declaration in value.split(";"):
+        name, colon, val = declaration.partition(":")
+        name = name.strip().lower()
+        if colon and name in SVG_STYLE_PROPERTIES:
+            keep.append(f"{name}:{val.strip()}")
+        elif declaration.strip():
+            dropped.append(name)
+    return ";".join(keep), dropped
+
+
+def svg_prefixed(value: str, prefix: str) -> str:
+    return SVG_URL_RE.sub(lambda m: f"url(#{prefix}{m.group(2).strip()[1:]})", value)
+
+
+def svg_expansion_check(root) -> None:
+    """Zählt die Elemente der Abbildung nach dem Auflösen aller <use> über den Referenzgraphen (je Teilbaum einmal
+    berechnet, jedes <use> zählt den ganzen Zielbaum mit) und lehnt Zyklen sowie mehr als FIGURE_MAX_EXPANSION ab."""
+    ids: dict[str, object] = {}
+    for el in root.iter():
+        if el.get("id") and el.get("id") not in ids:
+            ids[el.get("id")] = el   # bei doppelter id gilt die erste, wie im Browser
+    sizes: dict[int, int] = {}
+    stack: set[int] = set()
+
+    def size(el) -> int:
+        key = id(el)
+        if key in sizes:
+            return sizes[key]
+        if key in stack:
+            raise FigureError("use verweist auf sich selbst (Zyklus)")
+        stack.add(key)
+        n = 1 + sum(size(child) for child in el)
+        href = el.get("href") if el.tag.rpartition("}")[2] == "use" else None
+        target = ids.get(href[1:]) if href and href.startswith("#") else None
+        if target is not None:
+            n += size(target)
+        stack.discard(key)
+        if n > FIGURE_MAX_EXPANSION:
+            raise FigureError(f"mehr als {FIGURE_MAX_EXPANSION} Elemente nach dem Auflösen von use")
+        sizes[key] = n
+        return n
+
+    try:
+        size(root)
+    except RecursionError as exc:
+        raise FigureError("use zu tief verschachtelt") from exc
+
+
+def clean_svg(source, prefix: str = "", label: str = "") -> tuple[str, list[str]]:
+    """Bereinigtes SVG als Text für die Seite (Standardbibliothek, xml.etree): (SVG, was entfernt wurde).
+
+    Abgelehnt (FigureError) wird, was sich nicht sicher lesen lässt: größer als 200 KB, anderes als UTF-8 (auch
+    UTF-16 ohne BOM, NUL-Bytes), `<!DOCTYPE` oder `<!ENTITY`, kein gültiges XML, Wurzel nicht svg, zu viele Elemente
+    (auch nach dem Auflösen von `<use>`, Zyklen eingeschlossen), kein viewBox. Alles andere wird bereinigt: Elemente und Attribute außerhalb der Allowlist samt Inhalt entfallen,
+    fremde Namensräume ebenso, href nur auf #id, url(…) nur auf #id, style nur mit SVG_STYLE_PROPERTIES, transform
+    nicht an der Wurzel (es höbe die Abbildung über die Seite). Mit prefix werden ids und ihre Verweise je Abbildung
+    umbenannt, damit sich mehrere nicht stören.
+    """
+    import xml.etree.ElementTree as ET
+    data = source if isinstance(source, bytes) else str(source).encode("utf-8")
+    if len(data) > FIGURE_MAX_BYTES:
+        raise FigureError(f"größer als {FIGURE_MAX_BYTES // 1024} KB")
+    if b"\x00" in data:
+        raise FigureError("nicht UTF-8 (NUL-Bytes)")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise FigureError("nicht UTF-8") from exc
+    if re.search(r"<!\s*(DOCTYPE|ENTITY)", text, re.I):
+        raise FigureError("DOCTYPE und ENTITY sind nicht erlaubt")
+    try:
+        root = ET.fromstring(text)   # als Text: eine encoding-Angabe im Kopf kann die Prüfung oben nicht mehr umgehen
+    except (ET.ParseError, ValueError) as exc:
+        raise FigureError(f"kein gültiges XML ({exc})") from exc
+
+    def local(tag) -> tuple[str, str]:
+        if not isinstance(tag, str):   # Kommentar oder Verarbeitungsanweisung
+            return "?", ""
+        if tag.startswith("{"):
+            ns, _, name = tag[1:].partition("}")
+            return ns, name
+        return "", tag
+
+    root_ns, root_name = local(root.tag)
+    if root_name != "svg" or root_ns not in ("", SVG_NS):
+        raise FigureError("Wurzelelement ist kein svg")
+    removed: set[str] = set()
+    count = 0
+
+    def add_text(el, text: str | None) -> None:
+        if text:
+            if len(el):
+                el[-1].tail = (el[-1].tail or "") + text
+            else:
+                el.text = (el.text or "") + text
+
+    def build(el, depth: int):
+        nonlocal count
+        count += 1
+        if count > FIGURE_MAX_ELEMENTS:
+            raise FigureError(f"mehr als {FIGURE_MAX_ELEMENTS} Elemente")
+        if depth > 60:
+            raise FigureError("zu tief verschachtelt")
+        name = local(el.tag)[1]
+        out = ET.Element(f"{{{SVG_NS}}}{name}")
+        for key, value in el.attrib.items():
+            kns, kname = local(key)
+            if kns == XLINK_NS and kname == "href":
+                kns = ""
+            if kns or kname not in SVG_ATTRIBUTES or kname.lower().startswith("on") \
+                    or (depth == 0 and kname == "transform"):
+                removed.add(f"Attribut {kname}")
+                continue
+            if kname == "href" and not (name in SVG_HREF_ELEMENTS and value.strip().startswith("#")
+                                        and SVG_ID_RE.fullmatch(value.strip()[1:])):
+                removed.add("Attribut href")
+                continue
+            if kname == "id" and not SVG_ID_RE.fullmatch(value):
+                removed.add("Attribut id")
+                continue
+            if kname != "id" and not svg_value_ok(value, style=kname == "style"):
+                removed.add(f"Attribut {kname}")
+                continue
+            if kname == "style":
+                value, dropped = svg_style(value)
+                removed.update(f"Stil {d}" for d in dropped)
+                if not value:
+                    continue
+            if kname == "id":
+                value = prefix + value
+            elif kname == "href":
+                value = "#" + prefix + value.strip()[1:]
+            else:
+                value = svg_prefixed(value, prefix)
+            out.set(kname, value)
+        in_text = name in SVG_TEXT_ELEMENTS
+        if in_text:
+            out.text = el.text
+        for child in el:
+            cns, cname = local(child.tag)
+            if cns == root_ns and cname in SVG_ELEMENTS:
+                sub = build(child, depth + 1)
+                if cname == "use" and sub.get("href") is None:
+                    removed.add("Element use")
+                    if in_text:
+                        add_text(out, child.tail)
+                    continue
+                out.append(sub)
+                sub.tail = child.tail if in_text else None
+            else:
+                removed.add(f"Element {cname or 'Kommentar'}" + ("" if cns == root_ns else " (fremder Namensraum)"))
+                if in_text:
+                    add_text(out, child.tail)
+        return out
+
+    clean = build(root, 0)
+    svg_expansion_check(clean)
+    if not clean.get("viewBox") or not SVG_VIEWBOX_RE.fullmatch(clean.get("viewBox", "")):
+        w, h = (SVG_NUMBER_RE.fullmatch(clean.get(k, "")) for k in ("width", "height"))
+        if not (w and h):
+            raise FigureError("viewBox fehlt (oder width und height als Zahlen)")
+        clean.set("viewBox", f"0 0 {w.group(1)} {h.group(1)}")
+    clean.set("role", "img")
+    if label:
+        clean.set("aria-label", label)
+    ET.register_namespace("", SVG_NS)
+    return ET.tostring(clean, encoding="unicode"), sorted(removed)
+
+
+def css_plain(css: str) -> str:
+    """CSS, wie der Browser es liest (CSS Syntax 3): ohne Kommentare, Maskierungen aufgelöst. `/*` in einer Zeichenkette
+    und in url(…) ohne Anführungszeichen beginnt keinen Kommentar; eine Zeichenkette endet spätestens am Zeilenende."""
+    out: list[str] = []
+    i, n = 0, len(css)
+
+    def escaped(at: int) -> tuple[str, int]:
+        hex_ = re.compile(r"([0-9a-fA-F]{1,6})(?:\r\n|\s)?").match(css, at + 1)
+        if hex_:
+            code = int(hex_.group(1), 16)
+            return (chr(code) if 0 < code < 0x110000 and not 0xD800 <= code < 0xE000 else "\ufffd"), hex_.end()
+        return css[at + 1:at + 2], at + 2
+
+    while i < n:
+        c = css[i]
+        if css.startswith("/*", i):
+            end = css.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+        elif c in "\"'":
+            out.append(c)
+            i += 1
+            while i < n and css[i] != c and css[i] not in "\n\r\f":
+                if css[i] == "\\":
+                    piece, i = escaped(i)
+                    out.append(piece)
+                else:
+                    out.append(css[i])
+                    i += 1
+            out.append(c)
+            i += i < n and css[i] == c
+        elif c == "\\":
+            piece, i = escaped(i)
+            out.append(piece)
+        else:
+            out.append(c)
+            i += 1
+            if c == "(" and "".join(out[-4:]).lower() == "url(":
+                while i < n and css[i].isspace():
+                    i += 1
+                if i < n and css[i] in "\"'":   # url("…") liest der Zweig für Zeichenketten
+                    continue
+                while i < n and css[i] != ")":
+                    if css[i] == "\\":
+                        piece, i = escaped(i)
+                        out.append(piece)
+                    else:
+                        out.append(css[i])
+                        i += 1
+    return "".join(out)
+
+
+def css_problem(css: str) -> str | None:
+    """Warum ein Design (CSS) nicht eingebettet wird: `@import`, `url(` auf etwas anderes als `#…` oder `data:`
+    für Schriften und Rasterbilder, `</style>`. Kommentare zählen nicht (außer für `</style`), Zeichenketten schon;
+    CSS-Maskierungen werden vorher aufgelöst (css_plain)."""
+    if re.search(r"</\s*style", css, re.I):
+        return "enthält </style"
+    text = css_plain(css)
+    if re.search(r"@\s*import", text, re.I):
+        return "@import lädt Fremdes nach"
+    if CSS_LOADER_RE.search(text) or re.search(r"expression\(|-moz-binding|behavior\s*:", text, re.I):
+        return "image-set, src, image, expression, binding und behavior sind nicht erlaubt"
+    urls = list(re.finditer(r"url\(\s*([\"']?)(.*?)\1\s*\)", text, re.I | re.S))
+    if len(urls) != len(re.findall(r"url\(", text, re.I)):
+        return "url( ohne Ende"
+    for m in urls:
+        target = m.group(2).strip()
+        if target.startswith("#") or CSS_DATA_RE.match(target):
+            continue
+        return f"url({target[:40]}) lädt Fremdes nach oder ist kein erlaubtes data: (erlaubt: #…, data: für Schriften und Rasterbilder)"
+    return None
+
+
+NOTICE_RUECKZUG_RE = re.compile(r"retraction|withdrawal|removal|retracted", re.I)
+NOTICE_KORREKTUR_RE = re.compile(r"correction|erratum|corrigendum|republished", re.I)
+
+
+def notice_kind(art: str) -> str:
+    """Art eines Hinweises (Crossref-Typ, PubMed-RefType oder -Publikationstyp): rueckzug, bedenken, korrektur oder ""."""
+    if NOTICE_RUECKZUG_RE.search(art):
+        return "rueckzug"
+    if re.search(r"concern", art, re.I):
+        return "bedenken"
+    return "korrektur" if NOTICE_KORREKTUR_RE.search(art) else ""
+
+
+def notice_text(h: dict) -> str:
+    """Ein Hinweis für die Meldung: Art, Dienst und Hinweis-DOI (bei update-to: die Arbeit, auf die er sich bezieht)."""
+    if h["quelle"].endswith("update-to"):
+        return f"{h['art']} laut {h['quelle']}: diese DOI ist selbst ein Hinweis zu {h['doi'] or '?'}"
+    return (f"{h['art']} laut {h['quelle']}" + (f", Hinweis-DOI {h['doi']}" if h.get("doi") else "")
+            + (f", Hinweis-PMID {h['pmid']}" if h.get("pmid") else ""))
+
+
+def crossref_notices(m: dict) -> list[dict]:
+    """Hinweise der Crossref-Antwort `message`: `updated-by` (Hinweise auf diese Arbeit) und `update-to` (diese Arbeit
+    ist selbst ein Hinweis auf eine andere)."""
+    out = []
+    for key in ("updated-by", "update-to"):
+        for u in m.get(key) or []:
+            if isinstance(u, dict) and u.get("type"):
+                out.append({"art": str(u["type"]), "doi": str(u.get("DOI") or ""), "quelle": f"crossref {key}"})
+    return out
+
+
+def pubmed_notices(xml: bytes) -> list[dict]:
+    """Hinweise aus dem efetch-XML eines PubMed-Eintrags: Publikationstyp „Retracted Publication“ und die Verweise
+    RetractionIn, ExpressionOfConcernIn, ErratumIn, CorrectedandRepublishedIn."""
+    import xml.etree.ElementTree as ET
+    art = ET.fromstring(xml).find(".//PubmedArticle")
+    if art is None:
+        raise ValueError("PMID nicht gefunden")
+    out = []
+    if any((p.text or "") == "Retracted Publication" for p in art.findall(".//PublicationType")):
+        out.append({"art": "Retracted Publication", "doi": "", "quelle": "pubmed"})
+    for c in art.findall(".//CommentsCorrections"):
+        typ = c.get("RefType", "")
+        if typ in ("RetractionIn", "ExpressionOfConcernIn", "ErratumIn", "CorrectedandRepublishedIn"):
+            source = c.findtext("RefSource") or ""
+            doi = re.search(r"10\.\d{4,9}/[^\s]+", source)
+            out.append({"art": typ, "doi": doi.group(0).rstrip(".,;") if doi else "", "pmid": c.findtext("PMID") or "",
+                        "quelle": "pubmed"})
+    return out
 
 
 # ---------------------------------------------------------------- Grundlagen
 
 
 class _Loader(yaml.SafeLoader):
-    """SafeLoader ohne Anker/Aliase und ohne implizite Zeitstempel.
+    """SafeLoader ohne Anker/Aliase, ohne implizite Zeitstempel, ohne Merge- und doppelte Schlüssel.
 
     Zeitstempel bleiben Strings, damit OKF-Werte wie 2026-06-30T14:00:00Z unverändert
-    geprüft und zurückgeschrieben werden.
+    geprüft und zurückgeschrieben werden. Doppelte Schlüssel sind abgelehnt, weil
+    set_frontmatter_key genau eine Zeile ändert; kein zweiter Eintrag darf dahinter weiter gelten.
     """
+
+    def flatten_mapping(self, node):
+        gesehen = set()
+        for schluessel, _ in node.value:
+            if schluessel.tag == "tag:yaml.org,2002:merge":
+                raise yaml.YAMLError("YAML-Merge-Schlüssel sind nicht erlaubt")
+            if isinstance(schluessel, yaml.ScalarNode):
+                if (schluessel.tag, schluessel.value) in gesehen:
+                    raise yaml.YAMLError(f"Doppelter Schlüssel {schluessel.value!r}")
+                gesehen.add((schluessel.tag, schluessel.value))
+        super().flatten_mapping(node)
 
     def compose_node(self, parent, index):
         if self.check_event(yaml.AliasEvent):
@@ -285,7 +710,10 @@ _Loader.yaml_implicit_resolvers = {
 
 
 def load_yaml(text: str):
-    return yaml.load(text, Loader=_Loader)
+    try:
+        return yaml.load(text, Loader=_Loader)
+    except RecursionError as exc:
+        raise yaml.YAMLError("YAML zu tief verschachtelt") from exc
 
 
 def dump_yaml(data) -> str:
@@ -323,6 +751,79 @@ def sha256_of(path: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 16), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _manifest_lesen(pfad: Path) -> dict | None:
+    """Eine JSON-Datei als Zuordnung, sonst None (OSError, ungültiges JSON, keine Zuordnung)."""
+    try:
+        data = json.loads(pfad.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def replace_file(path: Path, text: str) -> None:
+    """Schreibt über eine Zwischendatei im selben Ordner: Ein Abbruch hinterlässt die alte Fassung, und ein Symlink am
+    Ziel wird ersetzt, nicht durchschrieben."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        regular = path.is_file() and not path.is_symlink()
+        os.chmod(tmp, path.stat().st_mode & 0o777 if regular else 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+# Schemata, die ein Link im Dashboard tragen darf
+LINK_SCHEMES = ("http", "https", "mailto")
+
+
+def link_scheme(href) -> str | None:
+    """Schema eines Links, wie der Browser es liest (Zeichenreferenzen aufgelöst, Tab und Zeilenumbruch entfernt,
+    Steuerzeichen und Leerzeichen am Anfang übergangen), klein geschrieben; None bei relativen Adressen."""
+    text = re.sub(r"[\t\n\r]", "", html.unescape(str(href or ""))).lstrip("".join(map(chr, range(0x21))))
+    m = re.match(r"([A-Za-z][A-Za-z0-9+.-]*):", text)
+    return m.group(1).lower() if m else None
+
+
+def safe_link(href) -> str:
+    """Die Adresse, wenn sie absolut ist und ein Schema aus LINK_SCHEMES trägt, sonst ""."""
+    return str(href) if link_scheme(href) in LINK_SCHEMES else ""
+
+
+class _EntryCleaner(HTMLParser):
+    """Literaturangabe als HTML: nur Auszeichnung, class und Links aus LINK_SCHEMES; alles andere wird zu Text."""
+
+    TAGS = {"a", "b", "code", "div", "em", "i", "small", "span", "strong", "sub", "sup"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag not in self.TAGS:
+            return
+        keep = [(k, v) for k, v in attrs if v and (k == "class" and re.fullmatch(r"[\w -]+", v)
+                                                   or k == "href" and tag == "a" and safe_link(v))]
+        self.out.append(f"<{tag}" + "".join(f' {k}="{html.escape(v, quote=True)}"' for k, v in keep) + ">")
+
+    def handle_endtag(self, tag):
+        if tag in self.TAGS:
+            self.out.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        self.out.append(html.escape(data, quote=False))
+
+
+def clean_entry(fragment: str) -> str:
+    """Eine Literaturangabe von pandoc so kürzen, dass sie gefahrlos als HTML in die Seite darf."""
+    cleaner = _EntryCleaner()
+    cleaner.feed(fragment)
+    cleaner.close()
+    return "".join(cleaner.out)
 
 
 def body_sha256(body: str) -> str:
@@ -363,10 +864,11 @@ def split_frontmatter(text: str) -> tuple[str | None, str]:
 
 
 def set_frontmatter_key(raw: str, key: str, value) -> str:
-    """Ersetzt einen Top-Level-Schlüssel im Frontmatter-Text; alles andere bleibt byte-genau."""
+    """Ersetzt einen Top-Level-Schlüssel im Frontmatter-Text, auch in Anführungszeichen; alles andere bleibt byte-genau."""
     block = dump_key(key, value)
     lines = raw.splitlines(keepends=True)
-    start = next((i for i, ln in enumerate(lines) if re.match(rf"{re.escape(key)}\s*:", ln)), None)
+    start = next((i for i, ln in enumerate(lines)
+                  if re.match(rf"""(?:{re.escape(key)}|"{re.escape(key)}"|'{re.escape(key)}')\s*:""", ln)), None)
     if start is None:
         return (raw if not raw or raw.endswith("\n") else raw + "\n") + block
     end = start + 1
@@ -379,8 +881,8 @@ def set_frontmatter_key(raw: str, key: str, value) -> str:
 
 def kurzbeleg(csl: dict, narrative: bool = False) -> str:
     """APA-7-Kurzbeleg aus CSL: 'Morath et al., 2024' oder erzählend 'Morath et al. (2024)'."""
-    names = [a.get("family") or a.get("literal", "?") for a in csl.get("author") or csl.get("editor") or []]
-    names = names or ["o. A."]
+    people = csl.get("author") or csl.get("editor") or []
+    names = [a.get("family") or a.get("literal", "?") for a in as_list(people) if isinstance(a, dict)] or ["o. A."]
     joiner = "und" if narrative else "&"
     if len(names) == 1:
         who = names[0]
@@ -388,8 +890,19 @@ def kurzbeleg(csl: dict, narrative: bool = False) -> str:
         who = f"{names[0]} {joiner} {names[1]}"
     else:
         who = f"{names[0]} et al."
-    year = ((csl.get("issued") or {}).get("date-parts") or [["o. D."]])[0][0]
+    year = csl_year(csl)
     return f"{who} ({year})" if narrative else f"{who}, {year}"
+
+
+def csl_year(csl: dict) -> str:
+    """Erstes Datumsteil aus csl.issued als Text, „o. D.“, wenn es fehlt oder sich nicht lesen lässt. Kann beliebiger
+    Text sein: vor der Ausgabe als HTML maskieren."""
+    issued = csl.get("issued")
+    try:
+        year = issued["date-parts"][0][0]
+    except (TypeError, KeyError, IndexError):
+        return "o. D."
+    return str(year) if year not in (None, "") else "o. D."
 
 
 INITIALS_RE = re.compile(r"(?:[A-ZÄÖÜ][a-zäöü]?\.?[\s-]*)+")
@@ -424,9 +937,63 @@ def csl_date(value) -> dict | None:
     return {"date-parts": [[int(x) for x in m.groups() if x]]}
 
 
+LICENSE_HINT = (" (unknown ist gültig; `lizenz <seite> --fetch` sucht über Crossref, DataCite, Europe PMC und "
+                "OpenAlex)")
 UNKNOWN_LICENSE_RE = re.compile(r"^(unknown|unbekannt|unklar|n/?a|none|keine angabe|-+)?$", re.I)
 # bewusst undatierte Quelle (date: o. J.): keine Warnung source_undated
 UNDATED_RE = re.compile(r"^\s*(o\.\s*j\.?|n\.\s*d\.?|undatiert|ohne datum)\s*$", re.I)
+
+
+def claim_lines(text: str) -> list[str]:
+    """Nicht leere Zeilen eines Abschnitts außer Hinweiskästen (`> [!todo] …` samt `>`-Folgezeilen bis zur Leerzeile)
+    und Fußnotendefinitionen samt eingerückter Folgezeilen (die stehen am Seitenende, auch wenn der Abschnitt der
+    letzte ist)."""
+    out, box, note = [], False, False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            box = False
+        elif note and line[0] in " \t":
+            continue
+        elif re.match(r">\s*\[!", stripped):
+            box, note = True, False
+        elif FOOTNOTE_DEF_RE.match(stripped):
+            box, note = False, True
+        elif not (box and stripped.startswith(">")):
+            box, note = False, False
+            out.append(stripped)
+    return out
+
+
+def kennungen(doi="", pmid="", arxiv="", url="") -> dict[str, str]:
+    """Vergleichbare Kennungen einer Arbeit: DOI klein ohne Vorsatz, PMID, arXiv-ID ohne Fassung; was fehlt, aus url."""
+    url = str(url or "")
+    doi = re.sub(r"^(https?://(dx\.)?doi\.org/|doi:)", "", str(doi or "").strip(), flags=re.I).lower()
+    if not doi and (m := re.search(r"doi\.org/(10\.\S+)", url, re.I)):
+        doi = m.group(1).lower()
+    pmid = str(pmid or "").strip().rstrip("/").rsplit("/", 1)[-1]
+    if not pmid and (m := re.search(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d+)", url)):
+        pmid = m.group(1)
+    arxiv = re.sub(r"^arxiv:", "", str(arxiv or "").strip(), flags=re.I).lower()
+    if not arxiv and doi.startswith("10.48550/arxiv."):
+        arxiv = doi.removeprefix("10.48550/arxiv.")
+    if not arxiv and (m := re.search(r"arxiv\.org/abs/([^\s?#]+)", url, re.I)):
+        arxiv = m.group(1).lower()
+    arxiv = re.sub(r"v\d+$", "", arxiv)
+    return {k: v for k, v in (("doi", doi), ("pmid", pmid), ("arxiv", arxiv)) if v}
+
+
+def kandidat_abgleich(kandidat: dict, ziel: dict[str, str], name: str) -> str:
+    """Ist der Kandidat eines Laufs dieselbe Arbeit wie `ziel` (kennungen)? WikiError, wenn sich alle gemeinsamen
+    Kennungen unterscheiden; ein Hinweistext, wenn es keine gemeinsame gibt; sonst ""."""
+    eigen = kennungen(kandidat.get("doi"), kandidat.get("pmid"), kandidat.get("arxiv"))
+    gemeinsam = [k for k in eigen if k in ziel]
+    if not gemeinsam:
+        return f"{name} und Kandidat {kandidat.get('nr')} haben keine vergleichbare Kennung: Zuordnung nicht geprüft"
+    if any(eigen[k] == ziel[k] for k in gemeinsam):
+        return ""
+    raise WikiError(f"Kandidat {kandidat.get('nr')} ist eine andere Arbeit als {name}: "
+                    + ", ".join(f"{k} {eigen[k]} ≠ {ziel[k]}" for k in gemeinsam) + "; nichts übernommen")
 
 
 def license_parts(lic) -> tuple[str, str]:
@@ -478,17 +1045,26 @@ def license_name_from(text: str) -> str:
     return ""
 
 
+def http_lesen(req: urllib.request.Request, timeout: int) -> bytes:
+    """Liest die Antwort; eine abgebrochene Verbindung wird wiederholt und zuletzt zum Netzfehler wie jeder andere."""
+    for versuch in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except http.client.HTTPException as exc:
+            if versuch == 2:
+                raise urllib.error.URLError(f"Antwort abgebrochen: {exc}") from exc
+            time.sleep(1)
+
+
 def http_json(url: str, timeout: int = 20, accept: str = "application/json"):
     """GET auf eine offizielle API (Crossref, Europe PMC, DataCite, OpenAlex); ohne Kennungen der Person im Kopf."""
     req = urllib.request.Request(url, headers={"User-Agent": f"okfw/{VERSION}", "Accept": accept})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
+    return json.loads(http_lesen(req, timeout).decode("utf-8"))
 
 
 def http_bytes(url: str, timeout: int = 30) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": f"okfw/{VERSION}"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+    return http_lesen(urllib.request.Request(url, headers={"User-Agent": f"okfw/{VERSION}"}), timeout)
 
 
 def today_parts() -> dict:
@@ -597,6 +1173,56 @@ def capture_file(item, source_path: str | None = None) -> tuple[Path, str | None
     return Path(local).expanduser(), repo or source_path
 
 
+def known_config_keys() -> set[str]:
+    """Schlüssel der wiki.toml, die der Kern kennt: „abschnitt.schlüssel“, „export.<export>.<schlüssel>“,
+    „types.*.<schlüssel>“; Tabellen mit Projektwerten als Schlüsseln (FREE_TABLES) nur mit ihrem Namen."""
+    keys = {f"export.{name}.{k}" for name, ks in EXPORT_KEYS.items() for k in ks}
+    keys |= {f"types.*.{k}" for k in TYPE_DEFAULTS}
+    for sec, spec in DEFAULT_CONFIG.items():
+        if sec not in ("export", "types"):
+            keys |= {f"{sec}.{k}" for k in spec} if spec and sec not in FREE_TABLES else {sec}
+    return keys
+
+
+def unknown_config(cfg: dict) -> list[tuple[str, str]]:
+    """(Name, Vorschlag) je Schlüssel der wiki.toml, den der Kern nicht kennt, und je unbekanntem Code in
+    [lint.severity]; Vorschlag ist der ähnlichste bekannte Name oder "". Tabellen aus FREE_TABLES bleiben ungeprüft."""
+    out = []
+
+    def check(name: str, key: str, choices) -> None:
+        if key not in choices:
+            close = difflib.get_close_matches(key, list(choices), n=1, cutoff=0.75)
+            out.append((name, close[0] if close else ""))
+
+    for sec, spec in cfg.items():
+        if sec in FREE_TABLES:
+            continue
+        if sec not in DEFAULT_CONFIG:
+            check(f"[{sec}]", sec, DEFAULT_CONFIG)
+        elif sec == "export":
+            for name, table in spec.items():
+                check(f"[export.{name}]", name, EXPORT_KEYS)
+                if name in EXPORT_KEYS and isinstance(table, dict):
+                    for key in table:
+                        check(f"[export.{name}] {key}", key, EXPORT_KEYS[name])
+        elif sec == "types":
+            for name, table in spec.items():
+                for key in table if isinstance(table, dict) else ():
+                    check(f"[types.{name}] {key}", key, TYPE_DEFAULTS)
+        elif sec == "rollen":
+            # Tabellen unter [rollen] sind Rollen ([rollen.lesen] …), deren Felder rollen.py prüft; geprüft wird der Rest
+            for key, value in spec.items():
+                if not isinstance(value, dict):
+                    check(f"[rollen] {key}", key, DEFAULT_CONFIG["rollen"])
+        else:
+            for key in spec:
+                check(f"[{sec}] {key}", key, DEFAULT_CONFIG[sec])
+            if sec == "lint":
+                for code in spec.get("severity") or {}:
+                    check(f"[lint.severity] {code}", code, SEVERITY)
+    return out
+
+
 def find_config(start: Path) -> Path | None:
     for directory in [start, *start.parents]:
         candidate = directory / "wiki.toml"
@@ -647,9 +1273,13 @@ class Finding:
 
 class Wiki:
     def __init__(self, root: Path, cfg: dict, config_path: Path | None = None):
+        no_table = [f"[{sec}]" for sec in DEFAULT_CONFIG if not isinstance(cfg.get(sec), dict)]
+        if no_table:
+            raise WikiError(f"{', '.join(no_table)} muss eine Tabelle sein")
         self.root = root.resolve()
         self.cfg = cfg
         self.config_path = config_path
+        self._pruefe_schreibpfade()
         self.bundle = self.root / cfg["wiki"]["bundle"]
         events = cfg["paths"].get("events") or f"{cfg['wiki']['bundle']}/.events.jsonl"
         self.events_path = self.root / events
@@ -663,6 +1293,9 @@ class Wiki:
             self.types[name] = merged
         self.folder_type = {spec["folder"]: name for name, spec in self.types.items()}
         self._pages: list[Page] | None = None
+        self.crossref_seen: dict[str, list[dict]] = {}   # DOI → Hinweise aus der Antwort von fetch_source
+        self.figure_count = 0             # Dashboard: Abbildungen dieses Baus, für eindeutige ids
+        self.bad_links: list[Path] = []   # pages(): Symlinks, die nicht auf eine Datei im Bundle zeigen
         self.public = False               # public_view(): öffentliche Ausgabe ohne verborgene Seiten
         self.withheld: set[Path] = set()  # public_view(): Pfade der weggelassenen Seiten
         required = cfg["wiki"].get("requires_core")
@@ -676,6 +1309,30 @@ class Wiki:
             raise WikiError("[lint.severity] erlaubt error, warn, info oder off: "
                             + ", ".join(f"{c} = {v!r}" for c, v in wrong.items()))
 
+    def _pruefe_schreibpfade(self) -> None:
+        """Jeder Pfad der wiki.toml, in den der Kern schreibt, muss aufgelöst (auch über Symlinks) im Projektordner
+        liegen: Ein geklontes Wiki darf über `..`, einen absoluten Pfad oder einen Symlink im Pfad keine Datei außerhalb
+        überschreiben."""
+        cfg = self.cfg
+        pfade = [("[wiki] bundle", cfg["wiki"].get("bundle")), ("[paths] events", cfg["paths"].get("events")),
+                 ("[paths] raw", cfg["paths"].get("raw")), ("[dashboard] path", cfg["dashboard"].get("path")),
+                 ("[dashboard] public_path", cfg["dashboard"].get("public_path"))]
+        pfade += [(f"[export.{name}] path", spec.get("path")) for name, spec in cfg["export"].items()
+                  if isinstance(spec, dict)]
+        for name, wert in pfade:
+            if wert in (None, ""):
+                continue
+            if not isinstance(wert, str):
+                raise WikiError(f"{name} muss ein Pfad (Text) sein, nicht {wert!r}")
+            pfad = self.root / wert
+            # ein Symlink als letztes Glied wird beim Schreiben ersetzt (replace_file), nicht verfolgt
+            aufgeloest = pfad.parent.resolve() / pfad.name if pfad.is_symlink() else pfad.resolve()
+            if not aufgeloest.is_relative_to(self.root):
+                raise WikiError(f"{name} = {wert!r} liegt außerhalb des Projektordners {self.root}: "
+                                "Pfade der wiki.toml müssen im Projektordner bleiben (auch über Symlinks)")
+            if {".git", ".claude"} & set(aufgeloest.relative_to(self.root).parts):
+                raise WikiError(f"{name} = {wert!r} liegt in .git oder .claude: dorthin schreibt der Kern nicht")
+
     @classmethod
     def load(cls, config: str | Path | None = None, root: str | Path | None = None,
              start: str | Path | None = None) -> "Wiki":
@@ -687,13 +1344,16 @@ class Wiki:
             config_path = find_config(Path(start or os.getcwd()).resolve())
         if not config_path or not config_path.is_file():
             raise ConfigMissing("keine wiki.toml gefunden (Projektordner mit --root oder Datei mit --config angeben)")
+        if config and root and Path(root).expanduser().resolve() != config_path.parent:
+            # Projektordner ist der Ordner der wiki.toml: alle Pfade darin gelten relativ zu ihm, auch im Guard
+            raise WikiError(f"--root {root} ist nicht der Ordner von --config {config}: Projektordner ist der Ordner "
+                            "der wiki.toml; nur --root DIR (nimmt DIR/wiki.toml) oder nur --config angeben")
         try:
             with config_path.open("rb") as f:
                 cfg = deep_merge(DEFAULT_CONFIG, tomllib.load(f))
         except tomllib.TOMLDecodeError as exc:
             raise WikiError(f"{config_path.name} nicht lesbar: {exc}") from exc
-        project = Path(root).expanduser().resolve() if root else config_path.parent
-        return cls(project, cfg, config_path)
+        return cls(config_path.parent, cfg, config_path)
 
     # ------------------------------------------------------------ Lesen
 
@@ -710,12 +1370,30 @@ class Wiki:
         return path.relative_to(self.bundle).with_suffix("").as_posix()
 
     def _hidden(self, path: Path) -> bool:
-        return any(part.startswith(".") for part in path.relative_to(self.bundle).parts)
+        """Versteckte Ordner und Dateien (Punkt) und der Ablageort der Schaubilder zählen nicht als Seiten."""
+        parts = path.relative_to(self.bundle).parts
+        return any(part.startswith(".") for part in parts) or parts[:1] == (FIGURES_DIR,) and not self._figures_typed()
+
+    def _figures_typed(self) -> bool:
+        """Ein Typ nutzt den Ordner der Schaubilder (Wikis von vor 0.5): .md-Seiten darin bleiben normale Seiten."""
+        return any(f"{spec['folder']}/".startswith(f"{FIGURES_DIR}/") for spec in self.types.values())
+
+    def _in_bundle(self, path: Path) -> bool:
+        """Liegt der Pfad nach Auflösen aller Symlinks im Bundle?"""
+        return path.resolve().is_relative_to(self.bundle.resolve())
+
+    def _im_projekt(self, rel) -> Path | None:
+        """Pfad einer Karte oder eines Manifests im Projektordner, sonst None: Sie stammen womöglich aus einem fremden Wiki."""
+        ziel = self.root / str(rel)
+        return ziel if ziel.resolve().is_relative_to(self.root.resolve()) else None
 
     def parse(self, path: Path) -> Page:
-        text = path.read_text(encoding="utf-8")
-        raw, body = split_frontmatter(text)
         pid = self.page_id(path)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return Page(path, pid, None, "", None, "Datei ist nicht UTF-8")
+        raw, body = split_frontmatter(text)
         if raw is None:
             return Page(path, pid, None, text, None, "kein Frontmatter-Block")
         if len(raw.encode("utf-8")) > MAX_FRONTMATTER_BYTES:
@@ -732,11 +1410,15 @@ class Wiki:
 
     def pages(self) -> list[Page]:
         if self._pages is None:
-            found = []
+            found, self.bad_links = [], []
             if self.bundle.is_dir():
                 for path in sorted(self.bundle.rglob("*.md")):
-                    if path.name not in RESERVED and not self._hidden(path):
+                    if path.name in RESERVED or self._hidden(path) or path.is_dir():
+                        continue
+                    if self._in_bundle(path) and path.is_file():
                         found.append(self.parse(path))
+                    else:
+                        self.bad_links.append(path)
             self._pages = found
         return self._pages
 
@@ -755,21 +1437,28 @@ class Wiki:
         return resolved
 
     def read_events(self) -> list[dict]:
+        """Ereignisse nach Zeit, jede Zeile einmal. Nach einem Merge paralleler Zweige (merge=union) stehen sie in
+        der Datei nicht mehr nach Zeit, und eine Zeile kann doppelt kommen. Gleichstand: Reihenfolge der Datei."""
         if not self.events_path.exists():
             return []
         events = []
-        for line in self.events_path.read_text(encoding="utf-8").splitlines():
+        for line in dict.fromkeys(self.events_path.read_text(encoding="utf-8").splitlines()):
             if not line.strip():
                 continue
             try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:
+                event = json.loads(line)
+            except (json.JSONDecodeError, RecursionError):
                 continue
-        return events
+            if isinstance(event, dict):
+                events.append(event)
+        undated = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+        return sorted(events, key=lambda e: as_datetime(e.get("ts")) or undated)
 
     # ------------------------------------------------------------ Schreiben
 
     def append_event(self, kind: str, page: str, detail: str = "", by: str | None = None) -> dict:
+        if self.events_path.is_symlink() and not self.events_path.resolve().is_relative_to(self.root):
+            raise WikiError(f"{self.events_path} ist ein Symlink aus dem Projekt heraus: kein Ereignis geschrieben")
         self.events_path.parent.mkdir(parents=True, exist_ok=True)
         event = {"ts": now_iso(), "kind": kind, "page": page, "by": by or self.actor, "detail": one_line(detail)}
         with self.events_path.open("a", encoding="utf-8") as f:
@@ -781,10 +1470,18 @@ class Wiki:
         path = self.bundle / f"{page}.md"
         if not path.exists():
             raise WikiError(f"Seite fehlt: {self.rel(path)}")
+        if not self._in_bundle(path):
+            raise WikiError(f"{path} liegt außerhalb des Bundles (Symlink?): nicht gelesen, nicht geschrieben")
         return path
+
+    def _kein_symlink(self, path: Path) -> None:
+        """Eine Karte als Symlink auf eine andere: Vermerk und Text landeten sonst in der anderen."""
+        if path.is_symlink():
+            raise WikiError(f"{path.name} ist ein symbolischer Link; nicht geschrieben. Bitte durch eine Datei ersetzen.")
 
     def _write_frontmatter(self, path: Path, updates: dict) -> None:
         """Setzt Top-Level-Schlüssel chirurgisch und prüft das Ergebnis vor dem Schreiben."""
+        self._kein_symlink(path)
         text = path.read_text(encoding="utf-8")
         m = FRONTMATTER_RE.match(text)
         if not m:
@@ -851,6 +1548,7 @@ class Wiki:
         Auf einer stable-Seite setzt das status: draft ([trust] edit_resets_stable): Die Freigabe galt dem
         alten Inhalt. verified bleibt stehen, das Ereignis nennt die verfallene Freigabe."""
         path = self.page_path(page)
+        self._kein_symlink(path)
         parsed = self.parse(path)
         text = path.read_text(encoding="utf-8")
         m = FRONTMATTER_RE.match(text)
@@ -860,12 +1558,18 @@ class Wiki:
             return path
         path.write_text(text[:m.end()] + "\n" + body.strip() + "\n", encoding="utf-8")
         self._pages = None
-        return self.body_changed(page, detail or "Inhalt geschrieben")
+        try:
+            return self.body_changed(page, detail or "Inhalt geschrieben")
+        except WikiError:   # sonst bliebe eine stable-Seite mit neuem Text stable
+            path.write_text(text, encoding="utf-8")
+            self._pages = None
+            raise
 
-    def body_changed(self, page: str, detail: str) -> Path:
+    def body_changed(self, page: str, detail: str, kind: str = "update") -> Path:
         """Nach einer Änderung am Körper (body, oder Edit/Write über den PostToolUse-Hook): generated nachziehen,
-        Ereignis update. Auf einer stable-Seite, deren Freigabe nicht mehr zum Inhalt passt, status: draft
-        ([trust] edit_resets_stable); passt sie (Text wieder wie freigegeben), bleibt stable."""
+        Ereignis update (create, wenn Write die Seite neu angelegt hat). Auf einer stable-Seite, deren Freigabe nicht
+        mehr zum Inhalt passt, status: draft ([trust] edit_resets_stable); passt sie (Text wieder wie freigegeben),
+        bleibt stable."""
         path = self.page_path(page)
         parsed = self.parse(path)
         if parsed.fm is not None:   # unlesbares Frontmatter bleibt unangetastet, der Lint meldet es
@@ -880,7 +1584,7 @@ class Wiki:
                            + (f"{human['by']} vom {str(human['at'])[:10]} verfallen" if human else "niemanden")
                            + ", neu prüfen und freigeben (verify)")
         self._pages = None
-        self.append_event("update", self.page_id(path), detail)
+        self.append_event(kind, self.page_id(path), detail)
         return path
 
     def release_state(self, page: Page) -> dict:
@@ -978,14 +1682,17 @@ class Wiki:
     def new_page(self, type_: str, slug: str, title: str = "", description: str = "", sources=(), tags=(),
                  access: str | None = None, resource: str | None = None, csl: dict | None = None,
                  extra: dict | None = None) -> Path:
+        """Neue Karte anlegen; status und verified gehören zur Freigabe (verify), nicht zu extra."""
         spec = self.types.get(type_)
         if spec is None:
             raise WikiError(f"Typ {type_!r} fehlt in wiki.toml [types] ({', '.join(self.types) or 'keine'})")
         if not SLUG_RE.fullmatch(slug):
             raise WikiError(f"Ungültiger Slug {slug!r}: nur kebab-case (a-z, 0-9, -)")
         path = self.bundle / spec["folder"] / f"{slug}.md"
-        if path.exists():
+        if os.path.lexists(path):   # auch ein Symlink ins Leere: Schreiben ginge durch ihn hindurch
             raise WikiError(f"{self.rel(path)} existiert schon – Karte von Hand bearbeiten")
+        if not self._in_bundle(path):
+            raise WikiError(f"{path} liegt außerhalb des Bundles (Symlink?): nicht angelegt")
         if csl:
             csl = {k: v for k, v in csl.items() if k != "id"}
             title = title or one_line(csl.get("title"))
@@ -1018,6 +1725,9 @@ class Wiki:
         for key, value in spec.get("defaults", {}).items():   # [types.X] defaults, z. B. evidenz = "peer-reviewed"
             if key not in fm and key not in (extra or {}):
                 fm[key] = value
+        gesperrt = sorted({"status", "verified"} & set(extra or {}))
+        if gesperrt:
+            raise WikiError(f"--set {', '.join(gesperrt)}: setzt nur die Freigabe (verify), nicht new")
         fm.update(extra or {})
         titles = {e["id"]: e.pop("title") for e in entries}
         fm["generated"] = {"by": self.actor, "at": now_iso()}
@@ -1036,6 +1746,10 @@ class Wiki:
         access = fm.get("access") or ""
         todo = {**TODO_BY_ACCESS.get(access, {}), **spec.get("todo", {}).get(access, {})}
         flags = as_list(fm.get(self.cfg["sources"]["updates_field"]))
+        check = fm.get(self.cfg["sources"]["retraction_field"])
+        found = [h for h in as_list((check if isinstance(check, dict) else {}).get("hinweise")) if isinstance(h, dict)]
+        pubmed = [str(h.get("art")) for h in found if h.get("quelle") == "pubmed"]
+        notices = [h for h in found if str(h.get("quelle")).endswith("update-to")]
         values = {
             "title": fm.get("title", ""), "description": fm.get("description", ""), "access": access,
             "kurzbeleg": kurzbeleg(csl, narrative=True) if csl else fm.get("title", ""),
@@ -1044,7 +1758,10 @@ class Wiki:
                                    for s in fm.get("sources", [])),
             "todo_kurzreferat": todo.get("kurzreferat", "> [!todo] Ausstehend."),
             "todo_kernaussagen": todo.get("kernaussagen", "> [!todo] Ausstehend."),
-            "hinweise": f"\n- ⚠ Crossref meldet: {', '.join(map(str, flags))} – vor Nutzung ansehen." if flags else "",
+            "hinweise": (f"\n- ⚠ Crossref meldet: {', '.join(map(str, flags))} – vor Nutzung ansehen." if flags else "")
+                        + (f"\n- ⚠ PubMed meldet: {', '.join(pubmed)} – vor Nutzung ansehen." if pubmed else "")
+                        + "".join(f"\n- ⚠ Crossref meldet: Diese Karte ist selbst ein Hinweis ({h.get('art')}) zu "
+                                  f"{h.get('doi') or '?'}, nicht die Arbeit – vor Nutzung ansehen." for h in notices),
         }
         if spec["template"]:
             template = self.template_path(spec["template"]).read_text(encoding="utf-8")
@@ -1060,6 +1777,8 @@ class Wiki:
             lines += [f"> {values['apa']}", ""]
         elif values["description"] and type_ != SOURCE_TYPE:
             lines += [values["description"], ""]
+        if values["hinweise"]:   # Crossref-Hinweise (Rückzug, Korrektur) unter dem APA-Block
+            lines += [values["hinweise"].strip(), ""]
         claims = self.cfg["lint"]["claims_section"].lower()
         for section in spec["sections"]:
             text = "> [!todo] Ausstehend."
@@ -1075,8 +1794,13 @@ class Wiki:
     def template_path(self, name: str) -> Path:
         """Vorlage aus [types.X] template: neben der wiki.toml, sonst im Skill (profiles/, templates/)."""
         base = self.config_path.parent if self.config_path else self.root
-        for candidate in (base / name, SKILL_DIR / "profiles" / name, SKILL_DIR / "templates" / name):
+        for ordner, candidate in ((base, base / name), (SKILL_DIR, SKILL_DIR / "profiles" / name),
+                                  (SKILL_DIR, SKILL_DIR / "templates" / name)):
             if candidate.is_file():
+                # sonst holt ein geklontes Wiki über `..` oder einen absoluten Pfad fremde Dateien in neue Karten
+                if not candidate.resolve().is_relative_to(ordner.resolve()):
+                    raise WikiError(f"Vorlage {name} liegt außerhalb des Projektordners: "
+                                    "Vorlagen müssen neben der wiki.toml oder im Skill liegen")
                 return candidate
         raise WikiError(f"Vorlage {name} fehlt (gesucht neben der wiki.toml und im Skill unter profiles/, templates/)")
 
@@ -1094,6 +1818,8 @@ class Wiki:
                     return csl, f"https://doi.org/{doi}", {"by": "process:datacite", "at": now_iso()}, []
                 csl = crossref_csl(m)
                 flags = [u.get("type") for u in m.get("updated-by", []) if u.get("type")]
+                # dieselbe Antwort dient der Rückzugsprüfung (check_retraction), ohne zweiten Abruf
+                self.crossref_seen[str(csl.get("DOI") or doi).lower()] = crossref_notices(m)
                 return csl, f"https://doi.org/{csl['DOI']}", {"by": "process:crossref", "at": now_iso()}, flags
             if pmid:
                 csl = pubmed_csl(pmid)
@@ -1104,6 +1830,58 @@ class Wiki:
         except (OSError, ValueError, KeyError) as exc:
             raise WikiError(f"Metadatenabruf fehlgeschlagen ({doi or pmid or arxiv}): {exc}") from exc
         raise WikiError("--doi, --pmid oder --arxiv angeben")
+
+    def check_retraction(self, doi: str = "", pmid: str = "", flags=()) -> dict:
+        """Rückzugsprüfung vor der Aufnahme einer Quelle: Crossref (`updated-by`, `update-to`; die Antwort von
+        fetch_source wird wiederverwendet) und PubMed (efetch: RetractionIn, ExpressionOfConcernIn, ErratumIn …).
+
+        Ergebnis {geprueft, via, ergebnis, hinweise, warnungen}; ergebnis ist keiner, korrektur, bedenken,
+        zurueckgezogen, nicht_geprueft (kein Dienst hat geantwortet) oder, wenn die DOI selbst nur der Hinweis auf eine
+        andere Arbeit ist (`update-to`), rueckzugsnotiz oder bedenkennotiz. Ein Netzfehler bricht nichts ab, er steht in
+        warnungen, und via nennt nur die Dienste, die geantwortet haben."""
+        import xml.etree.ElementTree as ET
+        via, notices, warnings = [], [], []
+        eutils = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+        if doi:
+            seen = self.crossref_seen.get(doi.lower())
+            if seen is None and flags:   # fetch_source ersetzt: nur die Typen sind bekannt
+                seen = [{"art": str(t), "doi": "", "quelle": "crossref updated-by"} for t in flags]
+            if seen is None:
+                try:
+                    seen = crossref_notices(http_json(f"https://api.crossref.org/works/{urllib.parse.quote(doi)}",
+                                                      timeout=15)["message"])
+                except urllib.error.HTTPError as exc:
+                    if exc.code != 404:   # 404: Crossref kennt die DOI nicht (DataCite), kein Fehler
+                        warnings.append(f"Crossref nicht erreichbar (HTTP {exc.code})")
+                except (OSError, ValueError, KeyError) as exc:
+                    warnings.append(f"Crossref nicht erreichbar ({exc})")
+            if seen is not None:
+                via.append("crossref")
+                notices += seen
+            if not pmid:
+                try:
+                    q = urllib.parse.urlencode({"db": "pubmed", "term": f'"{doi}"[doi]', "retmode": "json", "tool": "okfw"})
+                    ids = http_json(f"{eutils}esearch.fcgi?{q}", timeout=15)["esearchresult"].get("idlist") or []
+                    pmid = str(ids[0]) if ids else ""
+                except (OSError, ValueError, KeyError) as exc:
+                    warnings.append(f"PubMed nicht erreichbar ({exc})")
+        if pmid:
+            try:
+                q = urllib.parse.urlencode({"db": "pubmed", "id": pmid, "retmode": "xml", "tool": "okfw"})
+                notices += pubmed_notices(http_bytes(f"{eutils}efetch.fcgi?{q}", timeout=15))
+                via.append("pubmed")
+            except (OSError, ValueError, ET.ParseError) as exc:
+                warnings.append(f"PubMed nicht erreichbar ({exc})")
+        kinds = {notice_kind(n["art"]) for n in notices if not n["quelle"].endswith("update-to")} - {""}
+        own = {notice_kind(n["art"]) for n in notices if n["quelle"].endswith("update-to")}
+        if not via:
+            warnings.append("Rückzug und Bedenken nicht geprüft: weder Crossref noch PubMed haben geantwortet")
+        result = ("nicht_geprueft" if not via else "zurueckgezogen" if "rueckzug" in kinds
+                  else "bedenken" if "bedenken" in kinds else "rueckzugsnotiz" if "rueckzug" in own
+                  else "bedenkennotiz" if "bedenken" in own
+                  else "korrektur" if "korrektur" in kinds | own else "keiner")
+        return {"geprueft": now_iso(), "via": via, "ergebnis": result,
+                "hinweise": [n for n in notices if notice_kind(n["art"])], "warnungen": warnings}
 
     def capture(self, slug: str, url: str, files, commit: str | None = None, license_name: str | None = None,
                 license_url: str | None = None, note: str | None = None, source_path: str | None = None) -> Path:
@@ -1168,10 +1946,12 @@ class Wiki:
 
     def manifest_license(self, packet) -> dict | None:
         """license-Block aus dem manifest.json eines Rohquellen-Pakets (capture --license), sonst None."""
-        manifest = self.root / str(packet) / "manifest.json" if packet else None
-        if not manifest or not manifest.is_file():
+        manifest = self._im_projekt(str(packet) + "/manifest.json") if packet else None
+        if manifest is None or not manifest.is_file():
             return None
-        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data = _manifest_lesen(manifest)
+        if data is None:
+            return None
         lic = data.get("license")
         if not isinstance(lic, dict) or not lic.get("name"):
             return None
@@ -1217,16 +1997,26 @@ class Wiki:
         return spec.get("label") or name, spec.get("description", "")
 
     def _ordered_folders(self) -> list[str]:
-        present = [d.name for d in sorted(self.bundle.iterdir()) if d.is_dir() and not d.name.startswith(".")]
+        present = [d.name for d in sorted(self.bundle.iterdir())
+                   if d.is_dir() and not d.name.startswith(".") and (d.name != FIGURES_DIR or self._figures_typed())]
         known = [spec["folder"] for spec in self.types.values() if spec["folder"] in present]
         return known + [d for d in present if d not in known]
+
+    @staticmethod
+    def order_rank(value) -> int | float:
+        """Rang für `order`: Zahlen und ganzzahliger Text zählen, alles andere steht wie eine Seite ohne `order` am Ende."""
+        if isinstance(value, str) and re.fullmatch(r"\s*-?\d+\s*", value):
+            return int(value)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            return value
+        return 99
 
     def learning_path(self) -> list[Page]:
         """Einstiegsseiten (Schlagwort aus [index] entry_tag) nach `order`, dann Titel: „Zuerst lesen“
         im Root-Index und Lernpfad im Dashboard."""
         tag = self.cfg["index"].get("entry_tag")
         start = [p for p in self.pages() if p.fm is not None and tag and tag in as_list(p.fm.get("tags"))]
-        return sorted(start, key=lambda p: (p.fm.get("order", 99), p.title.lower()))
+        return sorted(start, key=lambda p: (self.order_rank(p.fm.get("order")), p.title.lower()))
 
     def render_root_index(self) -> str:
         idx = self.cfg["index"]
@@ -1327,12 +2117,8 @@ class Wiki:
         return "\n".join(lines).rstrip() + "\n"
 
     def csl_items(self) -> list[dict]:
-        field = self.cfg["export"].get("csl", {}).get("field", "csl")
-        items = []
-        for p in self.pages():
-            if p.fm and p.type == SOURCE_TYPE and isinstance(p.fm.get(field), dict):
-                items.append(dict({"id": p.path.stem}, **p.fm[field]))
-        return sorted(items, key=lambda r: r["id"])
+        """CSL-JSON aller Quellenkarten über csl_item, also dieselbe Grundlage wie die APA-Angaben im Dashboard."""
+        return sorted((self.csl_item(p) for p in self.pages() if p.fm and p.type == SOURCE_TYPE), key=lambda r: r["id"])
 
     def csl_style(self) -> Path:
         """Zitierstil für pandoc: [export.csl] style, sonst templates/apa.csl (APA 7)."""
@@ -1382,12 +2168,12 @@ class Wiki:
             return []
         changed = []
         for path, content in self.projections().items():
-            if path.exists() and path.read_text(encoding="utf-8") == content:
+            if path.exists() and not path.is_symlink() and path.read_text(encoding="utf-8", errors="replace") == content:
                 continue
             changed.append(path)
             if not check:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(content, encoding="utf-8")
+                replace_file(path, content)
         if self.cfg["dashboard"].get("auto") and not check:
             self.write_dashboard()
         return changed
@@ -1426,11 +2212,18 @@ class Wiki:
             if sev != "off":
                 findings.append(Finding(sev, code, self.rel(path), msg))
 
+        for name, hint in unknown_config(self.cfg):
+            add("config_unknown", self.config_path or self.root / "wiki.toml",
+                f"{name} kennt der Kern nicht und wirkt nicht" + (f" (gemeint: {hint}?)" if hint else ""))
+        self._lint_rollen(add)
+        self._lint_design(add)
         if not self.bundle.is_dir():
             add("bundle_missing", self.bundle, "Bundle-Ordner fehlt")
             return findings
         self._lint_reserved(add)
         pages = self.pages()
+        for path in self.bad_links:
+            add("link_leaves_bundle", path, "Symlink zeigt nicht auf eine Datei im Bundle: keine Seite, nicht gelesen")
         by_path = {p.path.resolve(): p for p in pages}
         inbound: Counter = Counter()
         edges: dict[Path, set] = {}
@@ -1451,12 +2244,50 @@ class Wiki:
         self._lint_signatures(add, pages)
         return sorted(findings, key=lambda f: (SEVERITY_ORDER.get(f.severity, 9), f.path, f.code))
 
+    def _lint_rollen(self, add) -> None:
+        """[rollen] daten und sperre (Modellrollen, rollen.py): ein unbekannter Wert wäre für rollen.py die strengste
+        Datenklasse, eine Zeichenkette statt Liste bei sperre sperrte nichts."""
+        spec, where = self.cfg["rollen"], self.config_path or self.root / "wiki.toml"
+        daten = spec.get("daten")
+        if daten and daten not in DATENKLASSEN:
+            add("rollen_unknown", where, f"[rollen] daten {daten!r} nicht in {' | '.join(DATENKLASSEN)}")
+        sperre = spec.get("sperre")
+        if not (isinstance(sperre, list) and all(isinstance(s, str) for s in sperre)):
+            add("rollen_unknown", where, "[rollen] sperre muss eine Liste von Anbieter-Kennungen sein, z. B. [\"openai\"]")
+
+    def _lint_design(self, add) -> None:
+        try:
+            self.design_css()
+        except WikiError as exc:
+            add("design_unsafe", self.config_path or self.root / "wiki.toml", str(exc))
+
+    def design_css(self) -> str:
+        """CSS aus [dashboard] design (Pfad relativ zum Projektordner), sonst design.css im Projektordner, geprüft."""
+        rel = self.cfg["dashboard"].get("design")
+        if not rel:
+            if not (self.root / "design.css").is_file():
+                return ""
+            rel = "design.css"
+        path = (self.root / str(rel)).resolve()
+        if not path.is_relative_to(self.root):
+            raise WikiError(f"[dashboard] design {rel!r} liegt außerhalb des Projektordners")
+        if not path.is_file():
+            raise WikiError(f"[dashboard] design: {rel} fehlt")
+        try:
+            css = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise WikiError(f"[dashboard] design: {rel} ist kein UTF-8") from exc
+        problem = css_problem(css)
+        if problem:
+            raise WikiError(f"[dashboard] design: {rel} {problem}")
+        return css
+
     def _lint_reserved(self, add) -> None:
         okf = self.cfg["wiki"]["okf_version"]
         for path in sorted(self.bundle.rglob("index.md")):
-            if self._hidden(path):
+            if self._hidden(path) or not (self._in_bundle(path) and path.is_file()):
                 continue
-            raw, _ = split_frontmatter(path.read_text(encoding="utf-8"))
+            raw, _ = split_frontmatter(path.read_text(encoding="utf-8", errors="replace"))
             if path.parent == self.bundle:
                 if raw is None:
                     add("okf_version_missing", path, f'Root-index.md ohne okf_version: "{okf}" (OKF §12)')
@@ -1470,9 +2301,9 @@ class Wiki:
             elif raw is not None:
                 add("index_frontmatter", path, "index.md unterhalb der Wurzel darf kein Frontmatter haben (OKF §8)")
         for path in sorted(self.bundle.rglob("log.md")):
-            if self._hidden(path):
+            if self._hidden(path) or not (self._in_bundle(path) and path.is_file()):
                 continue
-            text = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8", errors="replace")
             if split_frontmatter(text)[0] is not None:
                 add("log_frontmatter", path, "log.md darf kein Frontmatter haben (OKF §9)")
             heads = [h.strip() for h in re.findall(r"^## (.+)$", text, re.M)]
@@ -1484,11 +2315,11 @@ class Wiki:
                 add("log_order", path, "Datumsgruppen nicht absteigend (OKF §9: neueste zuerst)")
         projections = self.projections()
         for path, content in projections.items():
-            if not path.exists() or path.read_text(encoding="utf-8") != content:
+            if not path.exists() or path.is_symlink() or path.read_text(encoding="utf-8", errors="replace") != content:
                 add("projection_stale", path, "veraltet – `okfw.py rebuild` ausführen")
         bib = self.cfg["export"].get("bibliography", {})
         if bib.get("path") and self.root / bib["path"] not in projections:
-            why = "pandoc fehlt" if not shutil.which("pandoc") else "keine Quellenkarte mit csl-Block"
+            why = "pandoc fehlt" if not shutil.which("pandoc") else "keine Quellenkarte"
             add("projection_unavailable", self.root / bib["path"], f"Literaturverzeichnis nicht erzeugbar: {why}")
 
     def _lint_page(self, p: Page, add, by_path, inbound, edges) -> None:
@@ -1505,12 +2336,14 @@ class Wiki:
         if not SLUG_RE.fullmatch(path.stem):
             add("path_not_kebab", path, "Dateiname nicht kebab-case")
         spec = spec or {**TYPE_DEFAULTS, "min_links": 0}
+        # eine Meldung je fehlender Lizenz: führt das Profil license, trägt diese Meldung den Hinweis von license_missing
+        hint = {"license": LICENSE_HINT} if p.type == SOURCE_TYPE else {}
         for key in spec["required"]:
             if is_empty(fm.get(key)):
-                add("missing_required", path, f"Pflichtfeld {key} fehlt (Profil)")
+                add("missing_required", path, f"Pflichtfeld {key} fehlt (Profil){hint.get(key, '')}")
         for key in spec["recommended"]:
             if key not in spec["required"] and is_empty(fm.get(key)):
-                add("missing_recommended", path, f"{key} fehlt (empfohlen)")
+                add("missing_recommended", path, f"{key} fehlt (empfohlen){hint.get(key, '')}")
         for key, allowed in self.cfg["enums"].items():
             for value in as_list(fm.get(key)):
                 if value not in allowed:
@@ -1540,6 +2373,10 @@ class Wiki:
         elif status == "stable" and not any(isinstance(v, dict) and str(v.get("by", "")).startswith("human:")
                                             for v in verified):
             add("stable_unverified", path, "status stable ohne verified-Eintrag durch human:<id>")
+        order = fm.get("order")
+        if (order is not None and self.cfg["index"].get("entry_tag") in as_list(fm.get("tags"))
+                and (isinstance(order, (str, bool)) or self.order_rank(order) == 99 and order != 99)):
+            add("order_invalid", path, f"order {order!r} ist keine Zahl; die Reihenfolge im Lernpfad braucht eine Zahl")
         release = self.release_state(p)
         if release["outdated"] and self.severity("verified_outdated") != "off":
             human = release["human"]
@@ -1608,6 +2445,8 @@ class Wiki:
             if missing:
                 add("sections_missing", path, "Abschnitte fehlen: " + ", ".join(missing))
 
+        self._lint_figures(p, add, sources, by_path)
+
         # Links und Graph (OKF §6)
         outgoing = 0
         bundle = self.bundle.resolve()
@@ -1630,7 +2469,59 @@ class Wiki:
         self._lint_contradictions(p, add, by_path)
 
         if p.type == SOURCE_TYPE:
-            self._lint_source(p, add)
+            self._lint_source(p, add, spec)
+
+    # ------------------------------------------------------------ Schaubilder
+
+    def figure_file(self, name: str) -> Path:
+        return self.bundle / FIGURES_DIR / f"{name}.svg"
+
+    def figure_refs(self, body: str) -> list[dict]:
+        """Bildverweise auf Schaubilder im Text (nicht in Code): {name, alt, caption} mit der Zeile darunter."""
+        lines = CODE_RE.sub("", body).splitlines()
+        out = []
+        for i, line in enumerate(lines):
+            for m in IMAGE_RE.finditer(line):
+                src = FIGURE_SRC_RE.match(m.group(2))
+                if src:
+                    out.append({"name": src.group(1), "alt": m.group(1),
+                                "caption": lines[i + 1] if i + 1 < len(lines) else ""})
+        return out
+
+    def figure_svg(self, name: str, prefix: str = "", label: str = "") -> tuple[str, list[str]]:
+        """Bereinigtes SVG der Abbildung `name` (clean_svg); FigureError, wenn die Datei fehlt oder abgelehnt wird."""
+        path = self.figure_file(name)
+        if not path.is_file():
+            raise FigureError(f"{self.rel(path)} fehlt")
+        if not self._in_bundle(path):
+            raise FigureError(f"{self.rel(path)} liegt außerhalb des Bundles")
+        if path.stat().st_size > FIGURE_MAX_BYTES:   # gar nicht erst einlesen
+            raise FigureError(f"größer als {FIGURE_MAX_BYTES // 1024} KB")
+        return clean_svg(path.read_bytes(), prefix, label)
+
+    def _lint_figures(self, p: Page, add, sources: dict, by_path: dict) -> None:
+        for ref in self.figure_refs(p.body):
+            name, caption = ref["name"], ref["caption"]
+            try:
+                self.figure_svg(name)
+            except FigureError as exc:
+                add("figure_missing", p.path, f"Abbildung {name}: {exc}")
+            labels = FOOTNOTE_REF_RE.findall(caption)
+            if not (FIGURE_CAPTION_RE.match(caption) and labels):
+                add("figure_caption", p.path, f"Abbildung {name}: direkt darunter fehlt eine Zeile `*Abb.: …*` mit "
+                    "Fußnote, etwa `*Abb.: Was sie zeigt. Eigene Darstellung nach Müller[^mueller].*`")
+                continue
+            if not re.search(r"übernommen", caption, re.I):
+                continue
+            for label in labels:
+                entry = sources.get(label)
+                card = by_path.get(self.resolve(p.path, str(entry["resource"]))) if entry else None
+                if card is None or card.fm is None:
+                    continue
+                value, note = self.rights_of(card)["abbildung"]
+                if value != "ja":
+                    add("figure_rights", p.path, f"Abbildung {name} ist aus {card.title} übernommen, Recht dazu "
+                        f"({RIGHTS_ACTIONS['abbildung']}): {RIGHT_WORDS[value]}" + (f" – {note}" if note else ""))
 
     def _lint_contradictions(self, p: Page, add, by_path) -> None:
         """Ein Widerspruchsblock braucht mindestens eine verlinkte Gegenseite mit eigenem Marker."""
@@ -1643,25 +2534,38 @@ class Wiki:
                 add("contradiction_one_sided", p.path, "Widerspruch nur hier markiert, nicht auf "
                     + ", ".join(f"/{o.id}.md" for o in others))
 
-    def _lint_source(self, p: Page, add) -> None:
+    def _lint_source(self, p: Page, add, spec: dict) -> None:
         fm, path = p.fm, p.path
         lint = self.cfg["lint"]
         access = fm.get("access")
         packet = fm.get("raw_packet")
         if packet:
-            manifest = self.root / str(packet) / "manifest.json"
-            if not manifest.exists():
+            manifest = self._im_projekt(str(packet) + "/manifest.json")
+            if manifest is None:
+                add("raw_missing", path, f"{packet} liegt außerhalb des Projekts")
+            elif not manifest.is_file():
                 add("raw_missing", path, f"{packet}/manifest.json fehlt")
             else:
-                for f in json.loads(manifest.read_text(encoding="utf-8")).get("files", []):
-                    target = self.root / str(packet) / f["path"]
-                    if not target.exists() or sha256_of(target) != f.get("sha256"):
-                        add("raw_tampered", path, f"{packet}/{f['path']} weicht vom Manifest ab")
+                data = _manifest_lesen(manifest)
+                if data is None or not isinstance(data.get("files"), list):
+                    add("raw_tampered", path, f"{packet}/manifest.json nicht lesbar")
+                else:
+                    for f in data["files"]:
+                        if not isinstance(f, dict) or not isinstance(f.get("path"), str) or not f["path"]:
+                            add("raw_tampered", path, f"{packet}: Manifest-Eintrag ohne path")
+                            continue
+                        target = self._im_projekt(f"{packet}/{f['path']}")
+                        if target is None:
+                            add("raw_tampered", path, f"{packet}/{f['path']} liegt außerhalb des Projekts")
+                        elif not target.is_file() or sha256_of(target) != f.get("sha256"):
+                            add("raw_tampered", path, f"{packet}/{f['path']} weicht vom Manifest ab")
         fulltexts = [f for f in as_list(fm.get("fulltext")) if isinstance(f, dict)]
         for ft in fulltexts:
-            target = self.root / str(ft.get("path", ""))
+            target = self._im_projekt(str(ft.get("path", "")))
             if not ft.get("path") or not ft.get("sha256"):
                 add("fulltext_unanchored", path, "fulltext braucht path und sha256")
+            elif target is None:
+                add("fulltext_absent", path, f"Volltext {ft['path']} liegt außerhalb des Projekts (sha256 ungeprüft)")
             elif not target.is_file():
                 add("fulltext_absent", path, f"Volltext {ft['path']} lokal nicht vorhanden (sha256 ungeprüft)")
             elif sha256_of(target) != ft["sha256"]:
@@ -1670,13 +2574,14 @@ class Wiki:
             add("fulltext_unanchored", path, f"access {access}, aber weder raw_packet noch fulltext-Block")
         if access == "citation":
             section = re.search(rf"^## +{re.escape(lint['claims_section'])}.*?$(.*?)(?=^## |\Z)", p.body, re.M | re.S)
-            if section and re.search(r"^\s*(?:[-*]|\d+\.)\s+\S", section.group(1), re.M):
+            if section and claim_lines(section.group(1)):
                 add("citation_with_claims", path,
                     f"{lint['claims_section']} trotz access citation – Inhalt nicht belegt")
         lic = self.license_of(p)
+        by_profile = is_empty(fm.get("license")) and "license" in [*spec["required"], *spec["recommended"]]
         if not lic["name"] and not lic["url"]:
-            add("license_missing", path, "Quelle ohne license.name (unknown ist gültig; "
-                "`lizenz <seite> --fetch` sucht über Crossref, DataCite, Europe PMC und OpenAlex)")
+            if not by_profile:   # sonst meldet missing_required bzw. missing_recommended, mit demselben Hinweis
+                add("license_missing", path, f"Quelle ohne license.name{LICENSE_HINT}")
         elif lic["cls"] == "unbekannt" and lic["known"]:
             add("license_unknown", path, "Lizenz unbekannt: vor Volltextablage, Abbildungen oder Weitergabe klären")
         elif lic["cls"] == "unbekannt":
@@ -1804,18 +2709,23 @@ class Wiki:
 
     def hidden_ids(self) -> set[str]:
         """IDs der Seiten, die in der öffentlichen Ausgabe fehlen: Wert aus [visibility] hidden oder unbekannter
-        Wert (ein Tippfehler soll eine Seite nicht veröffentlichen; der Lint meldet ihn als enum_invalid)."""
+        Wert (ein Tippfehler soll eine Seite nicht veröffentlichen; der Lint meldet ihn als enum_invalid). Ohne
+        bekannte Werte ist jeder Wert unbekannt (Lint visibility_values_missing)."""
         hidden = {str(v) for v in as_list(self.cfg["visibility"].get("hidden"))}
         allowed = self.visibility_values()
         return {pid for pid, (v, _) in self.visibility().items()
-                if v in hidden or (v and allowed is not None and v not in allowed)}
+                if v in hidden or (v and (allowed is None or v not in allowed))}
 
     def _lint_visibility(self, add, pages) -> None:
         field = self.cfg["visibility"].get("field")
         if not field:
             return
         allowed = self.visibility_values()
-        if field not in self.cfg["enums"] and allowed is not None:  # sonst prüft das [enums] schon
+        if allowed is None:
+            add("visibility_values_missing", self.config_path or self.root / "wiki.toml",
+                f"[visibility] field = {field!r} ohne bekannte Werte: [enums] {field} oder [visibility] default setzen; "
+                "bis dahin fehlt jede Seite mit diesem Feld in der öffentlichen Ausgabe, dashboard --oeffentlich bricht ab")
+        elif field not in self.cfg["enums"]:  # sonst prüft das [enums] schon
             for p in pages:
                 for value in as_list((p.fm or {}).get(field)):
                     if str(value) not in allowed:
@@ -1855,13 +2765,61 @@ class Wiki:
         return entry
 
     def set_fundweg(self, page: str, entry: dict, append: bool = False) -> Path:
+        return self.set_fundwege(page, [entry], append=append)
+
+    def set_fundwege(self, page: str, entries: list[dict], append: bool = False) -> Path:
+        """Einen oder mehrere Fundwege setzen (ein Eintrag als Zuordnung, mehrere als Liste) oder anhängen; ein Schreibvorgang."""
         path = self.page_path(page)
         parsed = self.parse(path)
+        if parsed.type != SOURCE_TYPE:
+            raise WikiError(f"{parsed.id} ist keine Quellenkarte (type {parsed.type or '–'}): Fundweg gibt es nur für Quellen")
         field = self.cfg["fundweg"].get("field") or "fundweg"
-        value = self.fundweg_of(parsed) + [entry] if append and self.fundweg_of(parsed) else entry
+        old = self.fundweg_of(parsed) if append else []
+        entries = [e for e in entries if e not in old]
+        if append and not entries:   # dieselben Einträge stehen schon da
+            return path
+        value = old + entries if old else entries[0] if len(entries) == 1 else entries
         self._write_frontmatter(path, {field: value, "generated": self.generated_now(parsed.fm)})
-        self.append_event("update", parsed.id, f"Fundweg: {entry['art']}" + (f" ({entry['db']})" if entry.get("db") else ""))
+        self.append_event("update", parsed.id, "Fundweg: " + ", ".join(
+            e["art"] + (f" ({e['db']})" if e.get("db") else "") for e in entries))
         return path
+
+    def fundwege_aus_lauf(self, lauf: str | Path, kandidat: str) -> tuple[dict, list[dict], list[str]]:
+        """(Kandidat, Fundwege, Hinweise) aus LAUF/kandidaten.json der Recherche (`api.py zusammenfuehren`): je Fund ein
+        Eintrag mit dem echten Zeitpunkt, db, query und by des Laufs. Ein Kandidat wird über seine Nr, DOI oder PMID
+        gewählt; ein reiner Websuche-Treffer ohne Kennung aus Weg 1 oder 2 gilt nicht. Ein Fund, dessen weg selbst eine
+        Fundweg-Art ist, behält sie (zitatverfolgung nur mit von); alle anderen Wege sind eine Suche."""
+        datei = Path(lauf).expanduser() / "kandidaten.json"
+        if not datei.is_file():
+            raise WikiError(f"{datei} fehlt: erst `api.py zusammenfuehren LAUF`")
+        try:
+            kandidaten = json.loads(datei.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            raise WikiError(f"{datei} nicht lesbar: {exc}") from exc
+        wahl = str(kandidat).strip()
+        norm_doi = re.sub(r"^(https?://(dx\.)?doi\.org/|doi:)", "", wahl, flags=re.I).lower()
+        k = next((k for k in kandidaten if isinstance(k, dict) and (
+            str(k.get("nr")) == wahl or norm_doi == str(k.get("doi") or "").lower()
+            or wahl.rstrip("/").rsplit("/", 1)[-1] == str(k.get("pmid") or "-"))), None)
+        if k is None:
+            raise WikiError(f"Kandidat {wahl!r} nicht in {datei}")
+        if k.get("nur_websuche") and not k.get("aufgeloest"):
+            raise WikiError(f"Kandidat {k.get('nr')} kommt nur aus der Websuche und ist nicht über Weg 1 oder 2 aufgelöst")
+        entries, notes = [], []
+        for f in (f for f in as_list(k.get("funde")) if isinstance(f, dict)):
+            art = f["weg"] if str(f.get("weg")) in FUNDWEG_ARTEN else "suche"
+            if art == "zitatverfolgung" and not f.get("von"):
+                raise WikiError(f"Kandidat {k.get('nr')}: Fund zitatverfolgung ohne von, die Quelle dazu fehlt im Lauf; "
+                                "Fundweg von Hand setzen: `fundweg <karte> --art zitatverfolgung --von <slug>`")
+            entries.append(self.fundweg_entry(art, db=f.get("db"), query=f.get("query"), von=f.get("von"),
+                                              at=f.get("at"), by=f.get("by")))
+            if f.get("at_aus_auftrag"):
+                notes.append(f"{f.get('db')}: Zeitpunkt = Startzeit laut Auftrag (Agent ohne Uhr)")
+            if f.get("aufgeloest_via"):
+                notes.append(f"{f.get('db')}: Websuche-Treffer, aufgelöst über {f['aufgeloest_via']}")
+        if not entries:
+            raise WikiError(f"Kandidat {k.get('nr')} hat keine Funde in {datei}")
+        return k, entries, notes
 
     def _lint_fundweg(self, p: Page, add) -> None:
         field = self.cfg["fundweg"].get("field") or "fundweg"
@@ -1887,11 +2845,26 @@ class Wiki:
 
     # ------------------------------------------------------------ Lizenzen und Nutzungsrechte
 
+    def source_keys(self, page: Page) -> dict[str, str]:
+        """Vergleichbare Kennungen einer Quellenkarte (kennungen) aus csl-Block, flachen Feldern und resource."""
+        fm = page.fm or {}
+        csl = fm.get(self.cfg["export"].get("csl", {}).get("field", "csl"))
+        csl = csl if isinstance(csl, dict) else {}
+        number = str(csl.get("number") or "")
+        return kennungen(csl.get("DOI") or fm.get("doi"), csl.get("PMID") or fm.get("pmid"),
+                         fm.get("arxiv") or (number if number.lower().startswith("arxiv:") else ""),
+                         fm.get("resource") or fm.get("url") or csl.get("URL"))
+
     def license_of(self, page: Page) -> dict:
         lic = (page.fm or {}).get("license")
         name, url = license_parts(lic)
         cls, known = classify_license(lic, self.cfg["licenses"].get("patterns"))
         return {"name": name, "url": url, "cls": cls, "label": LICENSE_CLASSES[cls], "known": known}
+
+    def license_named(self, page: Page) -> bool:
+        """Trägt die Karte eine Lizenz mit Namen (außer unknown und gleichwertigen)? Dann überschreibt `lizenz --fetch`
+        sie nur mit --force: eine benannte, nicht eingeordnete Lizenz braucht eine Klasse, keinen neuen Abruf."""
+        return not UNKNOWN_LICENSE_RE.match(self.license_of(page)["name"])
 
     def rights_matrix(self) -> dict[str, dict[str, tuple[str, str]]]:
         """Rechte je Lizenzklasse, mit den Abweichungen aus [rights.<klasse>] der wiki.toml."""
@@ -2150,7 +3123,8 @@ class Wiki:
                         # Satzpunkt am Ende der Fußnote („Zeile 41–54.“) gehört nicht zur Fundstelle
                         text += ", " + html.escape(re.sub(r"(?<=\d)\.$", "", loc.group(0)))
                     tip = html.escape(notes.get(i, ""), quote=True)
-                    parts.append(f'<a class="cite-ref" href="#lit-{key}"' + (f' title="{tip}"' if tip else "") + f">{text}</a>")
+                    parts.append(f'<a class="cite-ref" href="#lit-{html.escape(key, quote=True)}"'
+                                 + (f' title="{tip}"' if tip else "") + f">{text}</a>")
                 cites.append('<span class="cite">(' + "; ".join(parts) + ")</span>")
                 token = f"⟦c{len(cites) - 1}⟧" + "".join(f"[^{u}]" for u in ids if u not in labels)
                 pre, before = m.group("pre") or "", segment[:m.start()]
@@ -2174,7 +3148,7 @@ class Wiki:
         fm = page.fm or {}
         field = self.cfg["export"].get("csl", {}).get("field", "csl")
         if isinstance(fm.get(field), dict):
-            return dict(fm[field], id=page.path.stem)
+            return {"id": page.path.stem, **{k: v for k, v in fm[field].items() if k != "id"}}
         item = {"id": page.path.stem, "title": one_line(fm.get("title")) or page.title}
         url = str(fm.get("url") or fm.get("resource") or "")
         if fm.get("authors") or fm.get("doi") or fm.get("year"):
@@ -2213,9 +3187,10 @@ class Wiki:
         if url:
             item["URL"] = url
         packet = fm.get("raw_packet")
-        manifest = self.root / str(packet) / "manifest.json" if packet else None
+        manifest = self._im_projekt(str(packet) + "/manifest.json") if packet else None
         if manifest and manifest.is_file():
-            accessed = csl_date(json.loads(manifest.read_text(encoding="utf-8")).get("retrieved_at"))
+            data = _manifest_lesen(manifest)
+            accessed = csl_date(data.get("retrieved_at")) if data else None
             if accessed:
                 item["accessed"] = accessed
         return item
@@ -2250,17 +3225,19 @@ class Wiki:
             cites = dict(re.findall(r'<div id="cite-([^"]+)">\s*<p><span class="citation"[^>]*>(.*?)</span></p>', out, re.S))
             for order, (key, entry) in enumerate(re.findall(r'<div id="ref-([^"]+)" class="csl-entry"[^>]*>(.*?)</div>', out, re.S)):
                 cite = " ".join(cites.get(key, "").split())
-                catalog[key] = {"cite": cite[1:-1] if cite.startswith("(") and cite.endswith(")") else cite,
-                                "entry": " ".join(entry.split()), "order": order}
+                catalog[key] = {"cite": clean_entry(cite[1:-1] if cite.startswith("(") and cite.endswith(")") else cite),
+                                "entry": clean_entry(" ".join(entry.split())), "order": order}
         for order, it in enumerate(sorted(items, key=lambda i: i["id"])):
             if it["id"] in catalog:
                 continue
-            year = ((it.get("issued") or {}).get("date-parts") or [["o. D."]])[0][0]
-            who = kurzbeleg(it).rsplit(",", 1)[0] if it.get("author") else it.get("title", it["id"])
-            link = it.get("URL") or (f"https://doi.org/{it['DOI']}" if it.get("DOI") else "")
-            entry = f"{html.escape(who)} ({year}). <em>{html.escape(it.get('title', ''))}</em>."
-            if link:
+            year = csl_year(it)
+            who = kurzbeleg(it).rsplit(",", 1)[0] if it.get("author") else str(it.get("title", it["id"]))
+            link = str(it.get("URL") or (f"https://doi.org/{it['DOI']}" if it.get("DOI") else ""))
+            entry = f"{html.escape(who)} ({html.escape(year)}). <em>{html.escape(str(it.get('title', '')))}</em>."
+            if safe_link(link):
                 entry += f' <a href="{html.escape(link)}">{html.escape(link)}</a>'
+            elif link:
+                entry += f" {html.escape(link)}"
             catalog[it["id"]] = {"cite": html.escape(f"{who}, {year}"), "entry": entry, "order": 10000 + order}
         self._apa = catalog
         return catalog
@@ -2308,7 +3285,7 @@ class Wiki:
             nodes.append({
                 **({"visibility": vis[p.id][0], "visibility_derived": vis[p.id][1], "internal": p.id in hidden}
                    if vis else {}),
-                "license": self.license_of(p) if is_source else None,
+                "license": {**(lic := self.license_of(p)), "url": safe_link(lic["url"])} if is_source else None,
                 "rights": [[a, *rights[a]] for a in RIGHTS_ACTIONS] if is_source else [],
                 "stored": self.fulltext_locations(p) if is_source and not self.public else [],
                 # Fundweg-Zeitpunkt nur als Datum: das Dashboard zeigt Tage, keine Uhrzeiten
@@ -2349,7 +3326,6 @@ class Wiki:
         return {
             "title": self.dashboard_title(), "generated": now_iso()[:10], "version": VERSION,
             "types": [{"name": n, "label": spec["label"], "folder": spec["folder"]} for n, spec in types.items()],
-            "domain_label": self.cfg["taxonomy"].get("label", "Themenbereich"),
             "labels": labels,
             "scope": ({"field": self.cfg["scope"]["field"], "label": self.cfg["scope"].get("label") or "Umfang",
                        "default": self.cfg["scope"].get("default") or "",
@@ -2375,7 +3351,8 @@ class Wiki:
         durch einen Menschen (mit belegten Aussagen und der Notiz der Gegenprüfung), verfallene Freigaben ohne
         neue Gegenprüfung und Seiten, deren Gegenprüfung keinen Prüfwert hat (unhashed, Lint verified_unhashed).
         command ist der Anfang des verify-Aufrufs, human die Kennung aus [trust] human, sonst die häufigste;
-        check_command der Aufruf der Gegenprüfung aus [trust] check_command (leer: Hinweis auf den Ablauf)."""
+        check_command der Aufruf der Gegenprüfung aus [trust] check_command, nur in der Form eines Slash-Befehls
+        (sonst leer: Hinweis auf den Ablauf; eine fremde wiki.toml unterlegt keine Shell-Zeile zum Kopieren)."""
         events: dict[tuple, list] = {}
         for e in self.read_events():
             if e.get("kind") == "verify" and as_datetime(e.get("ts")):
@@ -2407,8 +3384,12 @@ class Wiki:
         human = str(self.cfg["trust"].get("human") or "")
         if not (human.startswith("human:") and ACTOR_RE.match(human)):
             human = humans.most_common(1)[0][0] if humans else ""
+        # Wert aus einer womöglich fremden wiki.toml: nur Slash-Befehle durchlassen, keine Shell-Zeile
+        check = str(self.cfg["trust"].get("check_command") or "")
+        if not re.fullmatch(r"/[\w:-]+(?: --?[\w-]+)*", check):
+            check = ""
         return {"command": f"{self.cli_prefix()} verify", "human": human, "actor": self.actor,
-                "check_command": str(self.cfg["trust"].get("check_command") or ""),
+                "check_command": check,
                 "pending": pending, "outdated": outdated, "unhashed": unhashed}
 
     def claims_of(self, page: Page) -> list[dict]:
@@ -2443,18 +3424,30 @@ class Wiki:
             if path.is_relative_to(home) and re.fullmatch(r"[\w./-]+", rel := path.relative_to(home).as_posix()):
                 return f"~/{rel}"
             return shlex.quote(str(path))
-        return f"uv run --quiet {short(SKILL_DIR / 'okfw.py')} --root {short(self.root)}"
+        return f"uv run --no-config --quiet {short(SKILL_DIR / 'okfw.py')} --root {short(self.root)}"
 
     def dashboard_title(self) -> str:
         """Wiki-Titel ohne den Index-Zusatz „– zuerst lesen“; der gehört in index.md, nicht ins Dashboard."""
         return re.sub(r"\s*[–—-]\s*zuerst lesen\s*$", "", self.cfg["wiki"]["title"], flags=re.I)
 
-    def render_dashboard(self) -> str:
+    def render_dashboard(self, csp: bool = True) -> str:
+        """Das Dashboard als eine Datei. Mit csp trägt sie selbst eine Content-Security-Policy ohne Fremdquellen und
+        einen Nonce je Bau an den ausführbaren Skripten; csp=False für `serve`, das Nonce und Kopfzeile selbst setzt."""
         template = (SKILL_DIR / "templates" / "dashboard.html").read_text(encoding="utf-8")
+        if csp:
+            nonce = secrets.token_urlsafe(16)
+            policy = (f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'unsafe-inline'; img-src data: blob:; "
+                      "font-src data:; base-uri 'none'; form-action 'none'")
+            template = template.replace('<meta charset="utf-8">', '<meta charset="utf-8">\n<meta http-equiv='
+                                        f'"Content-Security-Policy" content="{policy}">', 1)
+            template = template.replace("<script>", f'<script nonce="{nonce}">')
         data = json.dumps(self.dashboard_data(), ensure_ascii=False).replace("<", "\\u003c")
         title = html.escape(f"{self.dashboard_title()} – Dashboard")
-        return (template.replace("/*__FONTS__*/", embedded_fonts())
-                .replace("__TITLE__", title).replace("__DATA__", data))
+        # `<script` im Design (auch im Kommentar) als CSS-Maskierung: die Datei hat genau eine Daten-Marke
+        design = re.sub(r"<(?=script)", r"\\3c ", self.design_css(), flags=re.I)
+        parts = {"/*__FONTS__*/": embedded_fonts(), "/*__DESIGN__*/": design, "__TITLE__": title, "__DATA__": data}
+        # ein Durchgang über die Vorlage: Eingesetztes (Design, Daten) wird nicht noch einmal ersetzt
+        return re.sub("|".join(map(re.escape, parts)), lambda m: parts[m.group(0)], template)
 
     def reader_html(self) -> dict[str, dict]:
         """{Konzept-ID: {heading, html, refs, apa, open}} für die Leseansicht des Dashboards.
@@ -2468,6 +3461,7 @@ class Wiki:
         try:
             import markdown
             from markdown.treeprocessors import Treeprocessor
+            from markdown.util import AMP_SUBSTITUTE
         except ImportError:
             return {p.id: {"heading": p.title, "html": f"<pre>{html.escape(p.body)}</pre>", "refs": [], "apa": None,
                            "excerpt": "", "outline": [], "open": []}
@@ -2488,7 +3482,7 @@ class Wiki:
                     if not (child.tag in skip or child.tag == "sup" and child.find("a[@class='footnote-ref']") is not None):
                         parts.append(self.plain(child, skip))
                     parts.append(child.tail or "")
-                text = re.sub(r"⟦c(\d+)⟧", lambda m: html.unescape(re.sub(r"<[^>]+>", "", self.cites[int(m.group(1))])),
+                text = re.sub(r"⟦c(\d+)⟧", lambda m: html.unescape(re.sub(r"<[^>]+>", "", cite_at(self.cites, m))),
                               "".join(parts))
                 return one_line(text)
 
@@ -2560,9 +3554,15 @@ class Wiki:
                 linkify(root)
                 for a in root.iter("a"):
                     href = a.get("href", "")
-                    if re.match(r"^[a-z][a-z0-9+.-]*:", href):
+                    # <name@beispiel.de>: Python-Markdown legt die Adresse als Zeichenreferenzen ab
+                    scheme = link_scheme(href.replace(AMP_SUBSTITUTE, "&"))
+                    if scheme in LINK_SCHEMES:
                         a.set("target", "_blank")
                         a.set("rel", "noopener")
+                        continue
+                    if scheme:   # javascript:, data:, vbscript: … bleibt als Text stehen
+                        a.tag = "span"
+                        a.attrib.clear()
                         continue
                     if href.startswith("#"):
                         continue
@@ -2598,7 +3598,9 @@ class Wiki:
                 return m.group(0).replace("<pre>", '<pre class="diagram">', 1)
             return m.group(0)
 
-        md = markdown.Markdown(extensions=["extra", "sane_lists"], output_format="html")
+        # „extra“ ohne attr_list und md_in_html: `{: onclick=…}` in einer Seite bliebe sonst kein Text
+        md = markdown.Markdown(extensions=["abbr", "def_list", "fenced_code", "footnotes", "tables", "sane_lists"],
+                               output_format="html")
         md.preprocessors.deregister("html_block")
         md.inlinePatterns.deregister("html")
         rewrite = Rewrite(md)
@@ -2622,8 +3624,13 @@ class Wiki:
             body, cites = self._apa_cites(body, labels, catalog)
             rewrite.page, rewrite.cites, rewrite.spots = p, cites, []
             md.reset()
-            rendered = re.sub(r"⟦c(\d+)⟧", lambda m, c=cites: c[int(m.group(1))], md.convert(body))
+            try:
+                rendered = md.convert(body)
+            except RecursionError:
+                rendered = f"<pre>{html.escape(body)}</pre>"   # zu tief verschachtelt: als Text statt Abbruch des Baus
+            rendered = re.sub(r"⟦c(\d+)⟧", lambda m, c=cites: cite_at(c, m), rendered)
             rendered = DIAGRAM_PRE_RE.sub(diagram, rendered)
+            rendered = self.figures_html(rendered)
             literature, seen = [], set()
             for label, target, entry in refs:
                 key = target.path.stem if target is not None else None
@@ -2644,11 +3651,46 @@ class Wiki:
                          "open": rewrite.spots}
         return out
 
+    def figures_html(self, rendered: str) -> str:
+        """Bilder im gerenderten Text: Schaubilder (`/abbildungen/<name>.svg`) werden bereinigt als `<figure>` mit
+        `<figcaption>` eingebettet (die Zeile `*Abb. …*` darunter ist die Bildunterschrift); fehlt die Datei oder wird sie
+        abgelehnt, steht „Abbildung nicht eingebunden: <name>“. Jedes andere Bild wird nie geladen, es erscheint als Text."""
+        def attr(tag: str, name: str) -> str:
+            m = re.search(rf'\b{name}="([^"]*)"', tag)
+            return html.unescape(m.group(1)) if m else ""
+
+        def figure(m: re.Match) -> str:
+            tag, src = m.group("img"), attr(m.group("img"), "src")
+            found = FIGURE_SRC_RE.match(src)
+            if not found:
+                return m.group(0)
+            name, caption = found.group(1), m.group("cap") or m.group("cap2")
+            self.figure_count += 1
+            try:
+                inner = self.figure_svg(name, prefix=f"abb{self.figure_count}-", label=attr(tag, "alt"))[0]
+            except FigureError:
+                inner = f'<span class="abb-fehlt">Abbildung nicht eingebunden: {html.escape(name)}</span>'
+            return (f'<figure class="abbildung"{m.group("attrs")}>{inner}'
+                    + (f"<figcaption>{caption}</figcaption>" if caption else "") + "</figure>")
+
+        def as_text(m: re.Match) -> str:
+            tag = m.group(0)
+            return ('<span class="bildverweis">Bild nicht eingebunden: '
+                    + html.escape(attr(tag, "alt") or attr(tag, "src")) + "</span>")
+
+        rendered = re.sub(r"<p(?P<attrs>[^>]*)>\s*(?P<img><img\b[^>]*>)\s*"
+                          r"(?:<em>(?P<cap>Abb\.(?:(?!</p>).)*?)</em>\s*)?</p>"
+                          r"(?:\s*<p>\s*<em>(?P<cap2>Abb\.(?:(?!</p>).)*?)</em>\s*</p>)?", figure, rendered, flags=re.S)
+        return re.sub(r"<img\b[^>]*>", as_text, rendered)
+
     def public_view(self) -> "Wiki":
         """Dasselbe Wiki ohne die Seiten aus hidden_ids(): Graph, Tabelle, Leseansicht, Übersichten, Kennzahlen,
         Literaturverzeichnis und Vorschauen entstehen dann nur aus öffentlichen Seiten."""
         if not self.cfg["visibility"].get("field") or not as_list(self.cfg["visibility"].get("hidden")):
             raise WikiError("öffentliche Ausgabe braucht [visibility] field und hidden in der wiki.toml")
+        if self.visibility_values() is None:
+            raise WikiError(f"öffentliche Ausgabe braucht bekannte Werte für {self.cfg['visibility']['field']}: "
+                            "[enums] oder [visibility] default in der wiki.toml (lint: visibility_values_missing)")
         hidden = self.hidden_ids()
         view = Wiki(self.root, self.cfg, self.config_path)
         view.public = True
@@ -2668,7 +3710,7 @@ class Wiki:
     def write_dashboard(self, out: str | Path | None = None, public: bool = False) -> Path:
         path = Path(out).expanduser().resolve() if out else self.dashboard_path(public)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text((self.public_view() if public else self).render_dashboard(), encoding="utf-8")
+        replace_file(path, (self.public_view() if public else self).render_dashboard())
         return path
 
     # ------------------------------------------------------------ Status
@@ -2712,7 +3754,7 @@ class Wiki:
                 "draft": drafts, "stale": stale, "todo": todos, "raw_pending": pending,
                 "trust": {k: n for k, n in tiers.items() if k != "outdated"}, "trust_outdated": tiers["outdated"],
                 "release": {k: release[k] for k in ("valid", "outdated", "stable_outdated", "pending", "unhashed")},
-                "events": len(events), "last_event": events[-1].get("ts", "") if events else "",
+                "events": len(events), "last_event": next((e["ts"] for e in reversed(events) if is_timestamp(e.get("ts"))), ""),
                 "fundweg": dict(fundweg), "scope": dict(scope), "hidden": len(self.hidden_ids())}
 
 
@@ -2720,6 +3762,12 @@ class Wiki:
 
 
 URL_RE = re.compile(r"https?://[^\s<>\"']*[^\s<>\"'.,;:!?)\]]")
+
+
+def cite_at(cites: list[str], m: re.Match) -> str:
+    """Der Beleg zum Platzhalter ⟦cN⟧; einen Platzhalter ohne Beleg hat die Seite selbst geschrieben, er bleibt Text."""
+    index = int(m.group(1))
+    return cites[index] if index < len(cites) else m.group(0)
 
 
 def linkify(parent) -> None:
@@ -2777,18 +3825,18 @@ RIS_TYPES = {"article-journal": "JOUR", "article": "JOUR", "book": "BOOK", "chap
 def ris_record(item: dict) -> str:
     """RIS-Eintrag (für Zotero und andere Literaturverwaltungen) aus einem CSL-JSON-Eintrag."""
     def date(value) -> str:
-        parts = ((value or {}).get("date-parts") or [[]])[0]
-        if not parts:
-            return ""
         try:
+            parts = value["date-parts"][0]
             y, m, d = [int(x) if x not in (None, "") else None for x in (list(parts) + [None, None])[:3]]
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, KeyError, IndexError):
+            return ""
+        if y is None:
             return ""
         return f"{y}/{m:02d}/{d:02d}/" if d and m else f"{y}/{m:02d}//" if m else f"{y}///"
 
     lines = [("TY", RIS_TYPES.get(item.get("type", ""), "GEN"))]
     for role, tag in (("author", "AU"), ("editor", "ED")):
-        for name in item.get(role) or []:
+        for name in (n for n in as_list(item.get(role)) if isinstance(n, dict)):
             text = name.get("literal") or ", ".join(x for x in (name.get("family"), name.get("given")) if x)
             if text:
                 lines.append((tag, text))
@@ -2871,6 +3919,24 @@ def embedded_fonts() -> str:
     return "\n".join([comment, *rules])
 
 
+def write_gitattributes(wiki: Wiki) -> list[str]:
+    """Trägt in <root>/.gitattributes merge=union für alles ein, was parallele Zweige beide ändern: den Ereignisstrom
+    und die Projektionen, die rebuild danach neu erzeugt. Vorhandene Zeilen bleiben. Gibt die neuen Zeilen zurück."""
+    bundle = wiki.rel(wiki.bundle)
+    paths = [wiki.rel(wiki.events_path), f"{bundle}/**/index.md", f"{bundle}/log.md"]
+    paths += [v["path"] for v in wiki.cfg["export"].values() if isinstance(v, dict) and v.get("path")]
+    paths = [p.removeprefix("./") for p in paths]
+    rules = [(f'"{p}"' if " " in p else p) + " merge=union" for p in paths]
+    path = wiki.root / ".gitattributes"
+    old = path.read_text(encoding="utf-8") if path.exists() else ""
+    new = [r for r in rules if r not in old.splitlines()]
+    if new:
+        note = "# okfw: parallele Zweige hängen hier beide an; nach dem Merge `okfw.py rebuild`, nie von Hand lösen"
+        new_text = "\n".join(([] if note in old else [note]) + new) + "\n"
+        replace_file(path, old + ("" if not old or old.endswith("\n") else "\n") + new_text)
+    return new
+
+
 def protected_paths(wiki: Wiki) -> list[str]:
     """Was nur der Kern schreibt. Der Guard (hooks/okf_hook.py, ohne PyYAML) schützt dieselben Pfade;
     tests/test_doku_code.py hält beide Listen gleich."""
@@ -2901,7 +3967,7 @@ def cmd_status(wiki: Wiki, args) -> int:
             if s["release"]["pending"] else "",
             f"Vor inhaltlicher Arbeit {wiki.rel(wiki.bundle)}/index.md lesen und im Wiki suchen.",
             f"Nicht direkt bearbeiten: {', '.join(protected_paths(wiki))}.",
-            f"Werkzeug: uv run --quiet {SKILL_DIR / 'okfw.py'} (new, capture, verify, lint vor Abschluss).",
+            f"Werkzeug: uv run --no-config --quiet {SKILL_DIR / 'okfw.py'} (new, capture, verify, lint vor Abschluss).",
         ]
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
                                                  "additionalContext": " ".join(t for t in text if t)}},
@@ -2965,12 +4031,18 @@ def cmd_rebuild(wiki: Wiki, args) -> int:
             print(f"veraltet: {wiki.rel(path)}")
         return 1 if changed else 0
     if args.hook:
-        # Stop-Hook: Lint-Fehler als eine Zeile für die Person, ohne den Abschluss zu blockieren
-        errors = Counter(f.code for f in wiki.lint() if f.severity == "error")
+        # Stop-Hook: Lint-Fehler als eine Zeile für die Person; ob der Abschluss blockiert wird, entscheidet okf_hook.py
+        errors = [f for f in wiki.lint() if f.severity == "error"]
         if errors:
-            codes = ", ".join(f"{code} {n}" for code, n in errors.most_common(4))
-            print(json.dumps({"systemMessage": f"okfw: Lint meldet {sum(errors.values())} Fehler ({codes}); "
-                                               "vor Abschluss `lint` ausführen und beheben."}, ensure_ascii=False))
+            codes = ", ".join(f"{code} {n}" for code, n in Counter(f.code for f in errors).most_common(4))
+            out = {"systemMessage": f"okfw: Lint meldet {len(errors)} Fehler ({codes}); "
+                                    "vor Abschluss `lint` ausführen und beheben."}
+            if args.befunde:
+                pages: dict[str, list[str]] = {}
+                for f in errors:
+                    pages.setdefault(f.path, []).append(f"{f.code}: {f.message}")
+                out["befunde"] = [f"{path}: {'; '.join(items)}" for path, items in pages.items()]
+            print(json.dumps(out, ensure_ascii=False))
         return 0
     if not args.quiet:
         print(f"Projektionen neu erzeugt: {len(changed)} Datei(en) geändert")
@@ -2986,12 +4058,39 @@ def cmd_new(wiki: Wiki, args) -> int:
     extra = {}
     for item in args.set:
         key, _, value = item.partition("=")
-        extra[key] = load_yaml(value) if value else ""
+        try:
+            extra[key] = load_yaml(value) if value else ""
+        except yaml.YAMLError as exc:
+            raise WikiError(f"--set {key}: kein gültiges YAML: {str(exc).splitlines()[0]}") from exc
+    funde, kandidat = [], None
+    if args.aus_lauf or args.kandidat:
+        if not (args.aus_lauf and args.kandidat):
+            raise WikiError("--aus-lauf und --kandidat gehören zusammen")
+        if args.type != SOURCE_TYPE or args.fundweg:
+            raise WikiError("--aus-lauf gibt es nur für Quellen und ersetzt --fundweg (die Funde bringt der Lauf mit)")
+        kandidat, funde, notes = wiki.fundwege_aus_lauf(args.aus_lauf, args.kandidat)
+        for note in notes:
+            print(f"okfw: Hinweis: {note}", file=sys.stderr)
+        if not (args.doi or args.pmid or args.arxiv or args.manuell or args.csl):   # Kennung des Kandidaten
+            args.doi, args.pmid, args.arxiv = (kandidat.get(k) or None for k in ("doi", "pmid", "arxiv"))
+            args.pmid = None if args.doi else args.pmid
+            args.arxiv = None if args.doi or args.pmid else args.arxiv
+            if not (args.doi or args.pmid or args.arxiv):
+                raise WikiError(f"Kandidat {kandidat.get('nr')} hat weder DOI noch PMID oder arXiv-ID: "
+                                "Karte mit --manuell oder --csl anlegen, Fundweg mit `fundweg --aus-lauf`")
+            kandidat = None   # die Karte nimmt seine Kennung, es gibt nichts abzugleichen
+        else:   # vor dem Abruf: Ist es eine andere Arbeit, sollen weder Netz noch Karte etwas davon sehen
+            kandidat_abgleich(kandidat, kennungen(args.doi or (csl or {}).get("DOI"), args.pmid or (csl or {}).get("PMID"),
+                                                  args.arxiv, args.url), "die angegebene Karte")
+    if (args.at or args.by) and not args.fundweg:
+        raise WikiError("--at und --by gehören zu --fundweg")
     lookup = args.doi or args.pmid or args.arxiv
     if (lookup or args.manuell or args.volltext or args.evidenz) and args.type != SOURCE_TYPE:
         raise WikiError("--doi, --pmid, --arxiv, --manuell, --volltext und --evidenz gibt es nur für Quellen")
     if sum(map(bool, (args.doi, args.pmid, args.arxiv, args.manuell, args.csl))) > 1:
         raise WikiError("nur eine Metadatenquelle: --doi, --pmid, --arxiv, --manuell oder --csl")
+    if args.trotz_rueckzug and not (args.doi or args.pmid):
+        raise WikiError("--trotz-rueckzug gilt nur mit --doi, --pmid oder --aus-lauf mit einer DOI oder PMID")
     src = wiki.cfg["sources"]
     if lookup:
         csl, resource, checked, flags = wiki.fetch_source(args.doi or "", args.pmid or "", args.arxiv or "")
@@ -2999,6 +4098,21 @@ def cmd_new(wiki: Wiki, args) -> int:
         extra[src["checked_field"]] = checked
         if flags:
             extra[src["updates_field"]] = flags
+        if not args.arxiv:   # Rückzug, Bedenken, Korrektur: vor dem Schreiben, ohne Treffer-Karte
+            check = wiki.check_retraction(doi=str(csl.get("DOI") or args.doi or ""),
+                                          pmid=str(args.pmid or csl.get("PMID") or ""), flags=flags)
+            for warning in check.pop("warnungen"):
+                print(f"okfw: Achtung: {warning}", file=sys.stderr)
+            hits = [h for h in check["hinweise"] if notice_kind(h["art"]) in ("rueckzug", "bedenken")]
+            if hits and not args.trotz_rueckzug:
+                raise RetractionFound("Rückzug oder Bedenken gemeldet, keine Karte angelegt: "
+                                      + "; ".join(notice_text(h) for h in hits)
+                                      + ". Trotzdem anlegen (mit Vermerk): --trotz-rueckzug")
+            if not check["hinweise"]:
+                del check["hinweise"]
+            if hits:
+                check["trotz"] = True
+            extra[src["retraction_field"]] = check
     elif args.manuell:
         if not (args.title and args.url):
             raise WikiError("--manuell braucht --titel und --url")
@@ -3018,7 +4132,15 @@ def cmd_new(wiki: Wiki, args) -> int:
         if args.type != SOURCE_TYPE:
             raise WikiError("--fundweg gibt es nur für Quellen")
         extra[wiki.cfg["fundweg"].get("field") or "fundweg"] = wiki.fundweg_entry(
-            args.fundweg, db=args.db, query=args.query, von=args.fundweg_von)
+            args.fundweg, db=args.db, query=args.query, von=args.fundweg_von, at=args.at, by=args.by)
+    if funde:
+        extra[wiki.cfg["fundweg"].get("field") or "fundweg"] = funde[0] if len(funde) == 1 else funde
+    if kandidat:   # jetzt auch mit dem, was der Abruf an Kennungen gebracht hat
+        hinweis = kandidat_abgleich(kandidat, kennungen(args.doi or (csl or {}).get("DOI"),
+                                                        args.pmid or (csl or {}).get("PMID"), args.arxiv, args.url),
+                                    "die angegebene Karte")
+        if hinweis:
+            print(f"okfw: Hinweis: {hinweis}", file=sys.stderr)
     path = wiki.new_page(args.type, args.slug, title=args.title or "", description=args.description or "",
                          sources=[s for s in (args.sources or "").split(",") if s],
                          tags=[t for t in (args.tags or "").split(",") if t],
@@ -3062,9 +4184,12 @@ def cmd_event(wiki: Wiki, args) -> int:
 def cmd_body(wiki: Wiki, args) -> int:
     if args.nachziehen == (args.file is not None):
         raise WikiError("body braucht genau eins: <datei|-> oder --nachziehen")
+    if args.neu and not args.nachziehen:
+        raise WikiError("--neu gilt nur mit --nachziehen")
     before = wiki.parse(wiki.page_path(args.page))
     if args.nachziehen:
-        path = wiki.body_changed(args.page, args.detail or "Körper geändert")
+        path = wiki.body_changed(args.page, args.detail or ("Seite angelegt" if args.neu else "Körper geändert"),
+                                 kind="create" if args.neu else "update")
         after = wiki.parse(path)
         print(f"nachgezogen: {wiki.rel(path)} (generated durch {wiki.actor})")
         if (before.fm or {}).get("status") == "stable" and (after.fm or {}).get("status") == "draft":
@@ -3101,9 +4226,57 @@ def cmd_sources(wiki: Wiki, args) -> int:
 
 
 def cmd_fundweg(wiki: Wiki, args) -> int:
+    if args.aus_lauf or args.kandidat:
+        if not (args.aus_lauf and args.kandidat):
+            raise WikiError("--aus-lauf und --kandidat gehören zusammen")
+        if args.art or args.db or args.query or args.von or args.at or args.by:
+            raise WikiError("--aus-lauf bringt Art, Datenbank, Suchstring, Zeitpunkt und Akteur aus dem Lauf mit")
+        kandidat, entries, notes = wiki.fundwege_aus_lauf(args.aus_lauf, args.kandidat)
+        karte = wiki.parse(wiki.page_path(args.page))
+        hinweis = kandidat_abgleich(kandidat, wiki.source_keys(karte), f"Karte {karte.id}")
+        for note in notes + [hinweis] * bool(hinweis):
+            print(f"okfw: Hinweis: {note}", file=sys.stderr)
+        vorher = wiki.fundweg_of(karte)
+        path = wiki.set_fundwege(args.page, entries, append=args.add)
+        neu = [e for e in entries if e not in vorher] if args.add else entries
+        print(f"{wiki.page_id(path)}: {len(neu)} Fundweg(e) aus Lauf, Kandidat {kandidat.get('nr')}"
+              + (" (ergänzt)" if neu and args.add else " (standen schon da, unverändert)" if args.add else ""))
+        return 0
+    if not args.art:
+        raise WikiError("--art oder --aus-lauf mit --kandidat angeben")
     entry = wiki.fundweg_entry(args.art, db=args.db, query=args.query, von=args.von, at=args.at, by=args.by)
     path = wiki.set_fundweg(args.page, entry, append=args.add)
     print(f"{wiki.page_id(path)}: Fundweg {FUNDWEG_ARTEN[args.art]}" + (" (ergänzt)" if args.add else ""))
+    return 0
+
+
+def cmd_abbildung(wiki: Wiki, args) -> int:
+    if not SLUG_RE.fullmatch(args.name):
+        raise WikiError(f"Ungültiger Name {args.name!r}: nur kebab-case (a-z, 0-9, -)")
+    source = Path(args.file).expanduser()
+    if not source.is_file():
+        raise WikiError(f"Keine Datei: {source}")
+    if source.stat().st_size > FIGURE_MAX_BYTES:
+        raise WikiError(f"{source} ist größer als {FIGURE_MAX_BYTES // 1024} KB: Abbildung vereinfachen")
+    try:
+        svg, removed = clean_svg(source.read_bytes())
+    except FigureError as exc:
+        raise WikiError(f"{source} abgelehnt: {exc}") from exc
+    target = wiki.figure_file(args.name)
+    if target.is_symlink() or not wiki._in_bundle(target):
+        raise WikiError(f"{target} ist ein Symlink oder liegt außerhalb des Bundles: nicht geschrieben")
+    existed = target.exists()
+    if existed and not args.ersetzen:
+        raise WikiError(f"{wiki.rel(target)} existiert schon; mit --ersetzen überschreiben")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    replace_file(target, svg + "\n")
+    wiki.append_event("update" if existed else "create", f"{FIGURES_DIR}/{args.name}",
+                      f"Abbildung {wiki.rel(target)} ({target.stat().st_size} Byte)")
+    if removed:
+        print(f"okfw: Achtung: aus dem SVG entfernt: {', '.join(removed)}", file=sys.stderr)
+    print(f"abgelegt: {wiki.rel(target)} ({target.stat().st_size} Byte)\n"
+          f"Einbinden: ![Titel](/{FIGURES_DIR}/{args.name}.svg)\n"
+          "           *Abb.: Was sie zeigt. Eigene Darstellung nach Müller[^mueller].*")
     return 0
 
 
@@ -3161,8 +4334,11 @@ def cmd_rechte(wiki: Wiki, args) -> int:
 
 
 def cmd_lizenz(wiki: Wiki, args) -> int:
+    skipped = 0
     if args.missing:
-        targets = [p for p in wiki.source_cards() if p.fm is not None and wiki.license_of(p)["cls"] == "unbekannt"]
+        unknown = [p for p in wiki.source_cards() if p.fm is not None and wiki.license_of(p)["cls"] == "unbekannt"]
+        targets = [p for p in unknown if args.force or not wiki.license_named(p)]
+        skipped = len(unknown) - len(targets)
     elif args.page:
         targets = [wiki.parse(wiki.page_path(args.page))]
     else:
@@ -3184,7 +4360,7 @@ def cmd_lizenz(wiki: Wiki, args) -> int:
         return 0
     found = 0
     for i, page in enumerate(targets):
-        if not args.missing and not args.force and wiki.license_of(page)["cls"] != "unbekannt":
+        if not args.missing and not args.force and wiki.license_named(page):
             print(f"{page.id}: hat schon eine Lizenz ({wiki.license_of(page)['name']}); --force zum Überschreiben")
             continue
         ids = wiki.identifiers(page)
@@ -3206,6 +4382,8 @@ def cmd_lizenz(wiki: Wiki, args) -> int:
             print(f"{page.id}: {lic['name']} ({lic['via']}) → {cls}")
     if args.missing:
         print(f"\n{found} von {len(targets)} Lizenzen gefunden" + (" (nichts geschrieben)" if args.dry_run else ""))
+        if skipped:
+            print(f"{skipped} benannte Lizenz(en) ohne Klasse übersprungen (`lizenz <seite> --class …` oder `--force`)")
     return 0
 
 
@@ -3224,7 +4402,16 @@ def cmd_dashboard(wiki: Wiki, args) -> int:
     return 0
 
 
+def cmd_serve(wiki: Wiki, args) -> int:
+    if str(SKILL_DIR) not in sys.path:
+        sys.path.insert(0, str(SKILL_DIR))
+    import okfw_serve
+    return okfw_serve.run(wiki, sys.modules[__name__], port=args.port, oeffnen=not args.no_open)
+
+
 def cmd_init(args) -> int:
+    if args.config:
+        raise WikiError("init legt die wiki.toml im Projektordner an: --root DIR statt --config angeben")
     root = Path(args.root or os.getcwd()).resolve()
     target = root / "wiki.toml"
     if target.exists():
@@ -3238,14 +4425,21 @@ def cmd_init(args) -> int:
         (wiki.bundle / spec["folder"]).mkdir(parents=True, exist_ok=True)
     wiki.append_event("init", ".", f"Bundle angelegt (Profil {args.profile}, okfw {VERSION})")
     wiki.rebuild()
+    write_gitattributes(wiki)
     print(f"angelegt: {wiki.rel(target)}, Bundle {wiki.rel(wiki.bundle)}/ – Titel und Typen in wiki.toml anpassen")
+    return 0
+
+
+def cmd_gitattributes(wiki: Wiki, args) -> int:
+    new = write_gitattributes(wiki)
+    print(f".gitattributes: {len(new)} Zeile(n) ergänzt" if new else ".gitattributes: schon vollständig")
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", help="Pfad zur wiki.toml")
-    parser.add_argument("--root", help="Projektordner (Standard: Ordner der wiki.toml)")
+    parser.add_argument("--root", help="Projektordner mit der wiki.toml (Standard: aufwärts ab dem aktuellen Ordner)")
     parser.add_argument("--version", action="version", version=f"okfw {VERSION}")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -3263,6 +4457,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--check", action="store_true", help="nichts schreiben, veraltete Projektionen melden")
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--hook", action="store_true", help="Stop-Hook: still neu erzeugen, Lint-Fehler als systemMessage-JSON")
+    p.add_argument("--befunde", action="store_true", help="mit --hook: Lint-Fehler zusätzlich je Seite im JSON (für okf_hook.py)")
     p.set_defaults(func=cmd_rebuild)
 
     def new_options(p):
@@ -3289,6 +4484,13 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--query", help="Fundweg: exakter Suchstring")
         p.add_argument("--fundweg-von", help="Fundweg zitatverfolgung: Slug der Quelle, deren Literatur verfolgt wurde")
         p.add_argument("--von", help="mit --volltext: Abruf-URL des Volltexts")
+        p.add_argument("--at", help="mit --fundweg: Zeitpunkt der Suche (ISO 8601 mit Offset), Standard: jetzt")
+        p.add_argument("--by", help="mit --fundweg: Akteur der Suche, Standard: [wiki] actor")
+        p.add_argument("--aus-lauf", help="Quelle: Ordner einer Recherche mit kandidaten.json; Kennung und alle Funde "
+                                          "des Kandidaten (--kandidat) kommen von dort")
+        p.add_argument("--kandidat", help="mit --aus-lauf: Nr, DOI oder PMID des Kandidaten")
+        p.add_argument("--trotz-rueckzug", action="store_true",
+                       help="mit --doi/--pmid: auch bei Rückzug oder Bedenken anlegen, mit Vermerk")
         p.set_defaults(func=cmd_new)
 
     p = sub.add_parser("new", help="Seite aus Vorlage anlegen")
@@ -3303,14 +4505,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("fundweg", help="Fundweg einer Quelle setzen oder ergänzen")
     p.add_argument("page")
-    p.add_argument("--art", required=True, choices=list(FUNDWEG_ARTEN))
+    p.add_argument("--art", choices=list(FUNDWEG_ARTEN))
     p.add_argument("--db")
     p.add_argument("--query")
     p.add_argument("--von")
     p.add_argument("--at", help="Zeitpunkt (ISO 8601 mit Offset), Standard: jetzt")
     p.add_argument("--by", help="Akteur, Standard: [wiki] actor")
     p.add_argument("--add", action="store_true", help="weiteren Fundweg anhängen statt ersetzen")
+    p.add_argument("--aus-lauf", help="Ordner einer Recherche mit kandidaten.json: alle Funde des Kandidaten (--kandidat) "
+                                      "mit ihrem echten Zeitpunkt, db, query und by")
+    p.add_argument("--kandidat", help="mit --aus-lauf: Nr, DOI oder PMID des Kandidaten")
     p.set_defaults(func=cmd_fundweg)
+
+    p = sub.add_parser("abbildung", help="SVG-Schaubild prüfen, bereinigen und unter <bundle>/abbildungen/ ablegen")
+    p.add_argument("name", help="Dateiname ohne .svg, kebab-case")
+    p.add_argument("--file", required=True, help="SVG-Datei, höchstens 200 KB")
+    p.add_argument("--ersetzen", action="store_true", help="eine vorhandene Abbildung gleichen Namens überschreiben")
+    p.set_defaults(func=cmd_abbildung)
 
     p = sub.add_parser("sources", aliases=["quellen"], help="sources[] einer Seite ergänzen oder kürzen")
     p.add_argument("page")
@@ -3355,6 +4566,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("file", nargs="?", help="Markdown-Datei, - für stdin")
     p.add_argument("--nachziehen", action="store_true",
                    help="Körper ist schon geändert (Edit/Write): nur generated nachziehen, stable wie bei body")
+    p.add_argument("--neu", action="store_true", help="mit --nachziehen: Seite ist neu (Write), Ereignis create statt update")
     p.add_argument("--detail")
     p.set_defaults(func=cmd_body)
 
@@ -3371,8 +4583,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--class", dest="cls", help=f"Klasse festlegen: {', '.join(LICENSE_CLASSES)}")
     p.add_argument("--via", help="Herkunft der Angabe: originaldokument, repo-lizenz, github-api … (Standard: manuell)")
     p.add_argument("--fetch", action="store_true", help="über Crossref, DataCite, Europe PMC und OpenAlex suchen (DOI oder PMID)")
-    p.add_argument("--missing", action="store_true", help="alle Quellen mit fehlender oder unbekannter Lizenz")
-    p.add_argument("--force", action="store_true", help="vorhandene Lizenz überschreiben")
+    p.add_argument("--missing", action="store_true", help="alle Quellen ohne Lizenzname oder mit unknown")
+    p.add_argument("--force", action="store_true",
+                   help="vorhandene Lizenz mit Namen überschreiben (mit --missing auch nicht eingeordnete)")
     p.add_argument("--dry-run", action="store_true", help="nur anzeigen, nichts schreiben")
     p.set_defaults(func=cmd_lizenz)
 
@@ -3382,6 +4595,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="ohne Seiten aus [visibility] hidden, nach build/wiki-dashboard-oeffentlich.html")
     p.add_argument("--open", action="store_true", help="im Browser öffnen")
     p.set_defaults(func=cmd_dashboard)
+
+    p = sub.add_parser("serve", help="Dashboard mit Bearbeiten im Browser, nur auf diesem Rechner")
+    p.add_argument("--port", type=int, default=0, help="Port (Standard: ein freier)")
+    p.add_argument("--no-open", action="store_true", help="den Browser nicht öffnen, nur die Adresse ausgeben")
+    p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("gitattributes", help="merge=union für Ereignisstrom und Projektionen in .gitattributes eintragen")
+    p.set_defaults(func=cmd_gitattributes)
 
     p = sub.add_parser("init", help="wiki.toml aus einem Profil anlegen")
     p.add_argument("--profile", default="default")
@@ -3410,8 +4631,9 @@ def main(argv=None) -> int:
             print(json.dumps(out, ensure_ascii=False))
             return 0
         print(f"okfw: {exc}", file=sys.stderr)
-        return 2
+        return exc.exit_code
 
 
 if __name__ == "__main__":
+    sys.stdout, sys.stderr = _Druckbar(sys.stdout), _Druckbar(sys.stderr)
     sys.exit(main())

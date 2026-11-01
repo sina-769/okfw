@@ -1,8 +1,9 @@
 """Gruppe 2: Befehle, die der Skill verlangt – generated nachziehen, sources, Rechte bei capture, Lizenz aus dem Manifest."""
 
 import json
+import subprocess
 
-from .hilfe import WikiTest
+from .hilfe import CORE, UV, WikiTest, clean_env
 
 ALT = {"by": "human:frueher", "at": "2020-01-01T00:00:00Z"}
 ACTOR = "claude-code/claude-opus-5-5"   # [wiki] actor im Profil default
@@ -138,3 +139,31 @@ class LizenzAusManifest(WikiTest):
     def test_ohne_paket_bleibt_unknown(self):
         self.quelle("q1")
         self.assertEqual(self.fm("sources/q1")["license"], {"name": "unknown", "url": None})
+
+
+class Projektordner(WikiTest):
+    """Projektordner ist der Ordner der wiki.toml; --root und --config dürfen nicht auseinanderlaufen."""
+
+    def okfw(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([UV, "run", "--quiet", "--script", str(CORE), *args], capture_output=True, text=True,
+                              env=clean_env(), cwd=self.base, timeout=120)
+
+    def test_config_und_root_auf_verschiedene_ordner(self):
+        anderer = self.base / "anderer"
+        anderer.mkdir()
+        config = str(self.root / "wiki.toml")
+        done = self.okfw("--config", config, "--root", str(anderer), "status")
+        self.assertEqual(done.returncode, 2, done.stdout)
+        self.assertIn("nur --root DIR", done.stderr)
+        self.assertEqual(self.okfw("--config", config, "--root", str(self.root), "status").returncode, 0)
+        allein = self.okfw("--config", config, "status")       # aus einem anderen Ordner: Projektordner bleibt
+        self.assertEqual(allein.returncode, 0, allein.stderr)
+        self.assertIn("Bundle: wiki ", allein.stdout)
+
+    def test_init_mit_config(self):
+        neu = self.base / "neu"
+        neu.mkdir()
+        done = self.okfw("--config", str(neu / "wiki.toml"), "init")
+        self.assertEqual(done.returncode, 2, done.stdout)
+        self.assertIn("--root DIR statt --config", done.stderr)
+        self.assertFalse((neu / "wiki.toml").exists())

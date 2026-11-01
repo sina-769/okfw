@@ -71,7 +71,7 @@ class WikiTest(unittest.TestCase):
         return json.loads(done.stdout.strip().splitlines()[-1])
 
     def hook(self, name: str, event: dict, project: Path | None = None) -> subprocess.CompletedProcess:
-        env = clean_env(CLAUDE_PROJECT_DIR=str(project or self.root))
+        env = clean_env(CLAUDE_PROJECT_DIR=str(project or self.root), TMPDIR=str(self.base))   # Rundenzähler je Test
         return subprocess.run([UV, "run", "--quiet", "--script", str(HOOK), name], input=json.dumps(event),
                               capture_output=True, text=True, env=env, cwd=self.base, timeout=120)
 

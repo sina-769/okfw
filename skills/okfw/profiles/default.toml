@@ -10,7 +10,7 @@ okf_version = "0.2"
 requires_core = "0.1"
 
 [paths]
-events = "wiki/.events.jsonl"         # Append-only-Ereignisstrom (Vorschlag: im Bundle)
+events = "wiki/.events.jsonl"         # Ereignisprotokoll, nur anhängen (Vorschlag: im Bundle)
 raw = "raw"                           # Rohquellen-Pakete: raw/<slug>/original/ + manifest.json
 protected = []                        # weitere Glob-Muster für den Guard-Hook
 

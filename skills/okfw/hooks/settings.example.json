@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --quiet \"$HOME/.claude/skills/okfw/okfw.py\" --root \"$CLAUDE_PROJECT_DIR\" status --hook 2>/dev/null || echo '{\"systemMessage\": \"okfw: Wiki-Status ließ sich nicht starten (uv run)\"}'",
+            "command": "uv run --no-config --quiet --script \"$HOME/.claude/skills/okfw/hooks/okf_hook.py\" session-start 2>/dev/null || echo '{\"systemMessage\": \"okfw: Hook session-start ließ sich nicht starten (uv run --script)\"}'",
             "timeout": 20
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --quiet --script \"$HOME/.claude/skills/okfw/hooks/okf_hook.py\" guard",
+            "command": "uv run --no-config --quiet --script \"$HOME/.claude/skills/okfw/hooks/okf_hook.py\" guard",
             "timeout": 10
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --quiet --script \"$HOME/.claude/skills/okfw/hooks/okf_hook.py\" post-edit 2>/dev/null || echo '{\"systemMessage\": \"okfw: Hook post-edit ließ sich nicht starten (uv run --script)\"}'",
+            "command": "uv run --no-config --quiet --script \"$HOME/.claude/skills/okfw/hooks/okf_hook.py\" post-edit 2>/dev/null || echo '{\"systemMessage\": \"okfw: Hook post-edit ließ sich nicht starten (uv run --script)\"}'",
             "timeout": 20
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --quiet \"$HOME/.claude/skills/okfw/okfw.py\" --root \"$CLAUDE_PROJECT_DIR\" rebuild --hook 2>/dev/null || echo '{\"systemMessage\": \"okfw: Rebuild beim Stop ließ sich nicht starten (uv run)\"}'",
+            "command": "uv run --no-config --quiet --script \"$HOME/.claude/skills/okfw/hooks/okf_hook.py\" stop 2>/dev/null || echo '{\"systemMessage\": \"okfw: Hook stop ließ sich nicht starten (uv run --script)\"}'",
             "timeout": 60
           }
         ]

@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Selbstreview vor einem Release: ein Wegwerf-Wiki über okfw selbst, mit okfw gebaut.
+"""Selbstreview: ein Wegwerf-Wiki über okfw selbst, mit okfw gebaut.
 
   uv run --script tests/selbstreview.py [--rev REV] [--neu]      # im Plugin-Ordner
 
@@ -477,6 +477,8 @@ def collect(stand: Path, tests: list[tuple[str, str, str]]) -> dict:
     def walk(d: dict, prefix: tuple = ()):
         for k, v in d.items():
             path = prefix + (k,)
+            if path[0] == "rollen" and len(path) >= 2 and path[1] not in ("daten", "sperre"):
+                continue   # [rollen.lesen] …: je Rolle freie Tabelle, die rollen.py prüft
             ck = concept_key(path)
             if isinstance(v, dict) and (ck is None or ck == ".".join(path) and path[0] in NESTED and len(path) < 3):
                 yield from walk(v, path)

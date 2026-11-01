@@ -1,0 +1,88 @@
+/* okfw serve: Bearbeiten im Dashboard. Nutzt die :root-Variablen der Vorlage; fehlt eine, greift der Rückfall. */
+.okfw-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.okfw-badge { font: 600 11px var(--font-mono); letter-spacing: 0.04em; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--warning); background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--ink); }
+.okfw-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; }
+.okfw-actions button, .okfw-bar button { cursor: pointer; }
+.okfw-danger { border-color: var(--warning) !important; }
+
+body.okfw-open { overflow: hidden; }
+.okfw-layer { position: fixed; inset: 0; z-index: 40; background: var(--page); color: var(--ink); overflow-y: auto; padding: 16px; }
+.okfw-box { max-width: 62rem; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px 22px; }
+.okfw-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 12px; }
+.okfw-head h2 { flex: 1; min-width: 12rem; margin: 0; font-family: var(--font-heading); font-size: 20px; font-weight: 400; }
+.okfw-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+.okfw-bar .sp { flex: 1; }
+.okfw-box h3 { font-size: 13px; font-weight: 600; margin: 18px 0 6px; color: var(--ink-2); }
+.okfw-box p { margin: 6px 0; }
+.okfw-note { font-size: 12px; color: var(--muted); }
+
+.okfw-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.okfw-tabs [role="tab"] { border: 0; border-bottom: 3px solid transparent; background: transparent; padding: 6px 12px; cursor: pointer; font-size: 14px; color: var(--ink-2); }
+.okfw-tabs [role="tab"][aria-selected="true"] { border-bottom-color: var(--accent); color: var(--ink); font-weight: 600; }
+
+.okfw-box input[type="text"], .okfw-box input[type="url"], .okfw-box select, .okfw-box textarea {
+  font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); width: 100%; box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--ink) 22%, transparent); border-radius: 8px; padding: 6px 8px; }
+.okfw-box textarea { font-family: var(--font-mono); line-height: 1.5; resize: vertical; }
+.okfw-box input[readonly], .okfw-box textarea[readonly] { background: var(--wash); color: var(--ink-2); }
+.okfw-text { min-height: 52vh; }
+.okfw-prop { min-height: 5.5em; }
+.okfw-box label { display: block; font-size: 12px; color: var(--ink-2); }
+.okfw-box label > input, .okfw-box label > select, .okfw-box label > textarea { margin-top: 3px; }
+.okfw-box label.okfw-check { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--ink); }
+.okfw-box label.okfw-check input { width: auto; margin: 0; }
+.okfw-box option:disabled { color: var(--muted); }
+
+.okfw-prev { border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; min-height: 52vh; overflow-wrap: anywhere; }
+.okfw-prev h1, .okfw-prev h2, .okfw-prev h3, .okfw-prev h4 { font-family: var(--font-heading); font-weight: 400; margin: 14px 0 6px; }
+.okfw-prev code { font-family: var(--font-mono); font-size: 0.9em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+.okfw-prev pre { background: var(--pre-bg); color: var(--pre-ink); padding: 10px 12px; border-radius: 8px; overflow-x: auto; }
+.okfw-prev pre code { background: none; padding: 0; }
+.okfw-prev blockquote { margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--border); color: var(--ink-2); }
+.okfw-prev .okfw-fn { font-size: 12px; color: var(--muted); }
+.okfw-prev .okfw-img, .okfw-prev .okfw-lnk { border-bottom: 1px dotted var(--ink-2); }
+
+.okfw-props { display: grid; grid-template-columns: minmax(7rem, 11rem) minmax(0, 1fr); gap: 8px 12px; align-items: start; }
+.okfw-props > .k { font: 12px var(--font-mono); padding-top: 8px; overflow-wrap: anywhere; }
+.okfw-props > .k.locked { color: var(--muted); }
+@media (max-width: 600px) { .okfw-props { grid-template-columns: minmax(0, 1fr); } .okfw-props > .k { padding-top: 0; } }
+
+.okfw-diff { font: 12px/1.5 var(--font-mono); border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; max-height: 45vh; overflow-y: auto; }
+.okfw-diff div { white-space: pre-wrap; overflow-wrap: anywhere; padding: 0 8px; }
+.okfw-diff .add { background: color-mix(in srgb, var(--c2) 20%, transparent); }
+.okfw-diff .del { background: color-mix(in srgb, var(--c4) 22%, transparent); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--ink) 35%, transparent); }
+.okfw-diff .gap { color: var(--muted); background: var(--wash); text-align: center; }
+.okfw-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 760px) { .okfw-cols { grid-template-columns: minmax(0, 1fr); } }
+
+.okfw-warn, .okfw-ok, .okfw-err { border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; border: 1px solid var(--border); }
+.okfw-warn { border-color: var(--warning); background: color-mix(in srgb, var(--warning) 16%, transparent); }
+.okfw-err { border-color: var(--c4); background: color-mix(in srgb, var(--c4) 16%, transparent); }
+.okfw-ok { border-color: var(--c2); background: color-mix(in srgb, var(--c2) 14%, transparent); }
+.okfw-warn ul, .okfw-err ul, .okfw-ok ul { margin: 4px 0 0; padding-left: 18px; }
+.okfw-find { display: flex; gap: 8px; align-items: baseline; }
+.okfw-find .sev { font: 600 11px var(--font-mono); min-width: 3.4em; }
+.okfw-find .sev.error { color: var(--c4); }
+.okfw-find .sev.warn { color: var(--c3); }
+
+.okfw-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.okfw-table th, .okfw-table td { text-align: left; vertical-align: top; padding: 8px 8px 8px 0; border-bottom: 1px solid var(--grid); }
+.okfw-table th { font-weight: 600; color: var(--ink-2); font-size: 12px; }
+.okfw-role { display: grid; grid-template-columns: 10rem repeat(3, minmax(0, 1fr)) auto; gap: 8px; align-items: end; padding: 10px 0; border-bottom: 1px solid var(--grid); }
+.okfw-role .name { font-weight: 600; padding-bottom: 6px; }
+.okfw-role .why { grid-column: 2 / -1; }
+@media (max-width: 900px) { .okfw-role { grid-template-columns: minmax(0, 1fr); } .okfw-role .why { grid-column: auto; } }
+.okfw-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin: 10px 0; }
+.okfw-card h4 { margin: 0 0 4px; font-size: 14px; }
+.okfw-cmd { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; }
+.okfw-cmd code { flex: 1; font: 12px var(--font-mono); background: var(--code-bg); padding: 8px 10px; border-radius: 6px; overflow-wrap: anywhere; }
+.okfw-vars td.sw { width: 3rem; }
+.okfw-vars .sw span { display: inline-block; width: 1.2rem; height: 1.2rem; border-radius: 4px; border: 1px solid var(--border); vertical-align: middle; }
+
+.okfw-toast { position: fixed; z-index: 60; left: 50%; bottom: 16px; transform: translateX(-50%); width: min(40rem, calc(100vw - 24px)); display: grid; gap: 8px; }
+.okfw-toast > div { background: var(--surface); color: var(--ink); border: 1px solid var(--ink); border-radius: 10px; padding: 10px 14px; box-shadow: 0 10px 30px var(--shadow); font-size: 13px; display: flex; gap: 10px; align-items: flex-start; }
+.okfw-toast > div.err { border-color: var(--c4); }
+.okfw-toast > div span { flex: 1; overflow-wrap: anywhere; white-space: pre-wrap; }
+.okfw-frage { max-width: min(34rem, calc(100vw - 32px)); background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+.okfw-frage::backdrop { background: color-mix(in srgb, var(--ink) 35%, transparent); }
+.okfw-frage p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }

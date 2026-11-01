@@ -249,6 +249,13 @@ body.reading { overflow: hidden; }
 .prose-content pre.diagram { background: var(--wash); color: var(--ink); border: 1px solid var(--border); font-size: 13.5px; line-height: 1.45; font-variant-ligatures: none; tab-size: 4; white-space: pre; }
 .pv-inner .prose-content pre.diagram { font-size: 12px; padding: 12px 14px; }
 @media (max-width: 600px) { .prose-content pre, .prose-content pre.diagram { font-size: 12px; padding: 12px 14px; } }
+/* Schaubilder (/abbildungen/*.svg, im Kern bereinigt und eingebettet): heller Grund in beiden Themen, damit feste Farben tragen */
+.prose-content figure.abbildung { margin: 24px 0; padding: 14px 16px; background: #FFFFFF; color: #1A1A1A; border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; }
+.prose-content figure.abbildung svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.prose-content figure.abbildung figcaption { margin-top: 10px; font-size: 13.5px; line-height: 1.5; color: #444444; }
+.prose-content figure.abbildung figcaption a, .prose-content figure.abbildung figcaption .cite { color: inherit; }
+.prose-content .abb-fehlt, .prose-content .bildverweis { font: 13px var(--font-mono); color: var(--muted); }
+.pv-inner .prose-content figure.abbildung { margin: 14px 0; padding: 8px 10px; }
 /* Sprung zu einer offenen Stelle */
 .prose-content .flash { animation: flash 2.6s ease-out 1; border-radius: 6px; scroll-margin: 80px; }
 @keyframes flash { 0%, 45% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 3px transparent; } }
@@ -355,6 +362,7 @@ details.rel-more > summary { font-size: 13px; color: var(--ink-2); cursor: point
 details.rel-more .rel-full { margin-left: 0; }
 .rel-cmd { display: flex; gap: 8px; align-items: flex-start; margin-top: 14px; }
 .rel-cmd code { flex: 1; font: 12px var(--font-mono); background: var(--code-bg); color: var(--ink); padding: 8px 10px; border-radius: 6px; overflow-wrap: anywhere; }
+/*__DESIGN__*/
 </style>
 <script>
   // Hell oder dunkel vor dem ersten Zeichnen setzen: gespeicherte Wahl, sonst die des Systems.
@@ -476,6 +484,10 @@ details.rel-more .rel-full { margin-left: 0; }
     }
     for (const c of kids) if (c !== null && c !== undefined && c !== false) e.append(c);
     return e;
+  }
+  // Links aus Daten nur als absolute Adresse mit erlaubtem Schema (wie link_scheme im Kern)
+  function safeHref(u) {
+    try { return ["http:", "https:", "mailto:"].includes(new URL(u).protocol); } catch (e) { return false; }
   }
   function s(tag, attrs) {
     const e = document.createElementNS(NS, tag);
@@ -914,7 +926,8 @@ details.rel-more .rel-full { margin-left: 0; }
   }
   const inScope = n => !scopeSel || n.scope === scopeSel;
   const visible = n => !hidden.has(n.type) && inScope(n);
-  let redrawTable = () => {}, redrawGlossary = () => {}, redrawOpen = () => {};
+  const scopedPath = () => PATH.filter(inScope);
+  let redrawTable = () => {}, redrawGlossary = () => {}, redrawOpen = () => {}, redrawPath = () => {};
   (function fillScope() {
     if (!SC) return;
     const box = $("scope");
@@ -927,8 +940,9 @@ details.rel-more .rel-full { margin-left: 0; }
         scopeSel = v;
         try { localStorage.setItem(scopeKey, v); } catch (e) { /* ohne Speicher */ }
         for (const [i, x] of btns.entries()) x.setAttribute("aria-pressed", String(opts[i][0] === v));
-        if (selected && !visible(selected)) { selected = null; unpin(); }
-        colsDirty = true; update(); redrawTable(); redrawGlossary(); redrawOpen();
+        if (selected && !visible(selected)) selected = null;
+        unpin(); // auch per Tastatur: die Karte nennt sonst den Schritt aus dem alten Umfang
+        colsDirty = true; update(); redrawTable(); redrawGlossary(); redrawOpen(); redrawPath();
       });
       return b;
     });
@@ -1222,6 +1236,7 @@ details.rel-more .rel-full { margin-left: 0; }
     p.append(h("div", { class: "meta" }, h("button", { class: "btn-primary", type: "button", onclick: () => openReader(n, "new") }, "Seite lesen")));
     if (n.outline.length) p.append(h("div", { class: "note" }, "Abschnitte: " + n.outline.join(" · ")));
     for (const el of [linkList("Verweist auf", n.outs), linkList("Verlinkt von", n.ins)]) if (el) p.append(el);
+    window.okfwEdit?.panel(p, n.id);
   }
 
   // ---------------------------------------------------------------- Leseansicht
@@ -1305,13 +1320,13 @@ details.rel-more .rel-full { margin-left: 0; }
       root.append(h("nav", { class: "crumb", "aria-label": "Pfad" }, D.title, h("span", { "aria-hidden": "true" }, "›"),
         h("span", { class: "pill" }, dotSvg(paint(n), 11), tlabel(n.type))));
     }
-    const step = PATH.indexOf(n);
+    const path = scopedPath(), step = path.indexOf(n); // Seite außerhalb des Umfangs: kein Schritt
     const stepBtn = (m, text, label) => h("button", { class: "ghost", type: "button", "aria-label": label, title: m.title, onclick: () => go(m) }, text);
     const head = h("header", { class: "r-head" },
       step >= 0 ? h("div", { class: "r-path" }, h("span", { class: "step-n", "aria-hidden": "true" }, String(step + 1)),
-        h("span", {}, `Lernpfad · Schritt ${step + 1} von ${PATH.length}`),
-        step > 0 ? stepBtn(PATH[step - 1], "‹", `Zurück zu Schritt ${step}`) : null,
-        step < PATH.length - 1 ? stepBtn(PATH[step + 1], "›", `Weiter mit Schritt ${step + 2}`) : null) : null,
+        h("span", {}, `Lernpfad · Schritt ${step + 1} von ${path.length}`),
+        step > 0 ? stepBtn(path[step - 1], "‹", `Zurück zu Schritt ${step}`) : null,
+        step < path.length - 1 ? stepBtn(path[step + 1], "›", `Weiter mit Schritt ${step + 2}`) : null) : null,
       n.cite ? h("div", { class: "r-kicker" }, n.cite) : null,
       h("h1", compact ? {} : { id: "r-title" }, n.heading || n.title));
     const body = h("div", { class: "prose-content" });
@@ -1325,7 +1340,7 @@ details.rel-more .rel-full { margin-left: 0; }
     root.append(head, body);
     if (step >= 0) {
       // weiter/zurück im Lernpfad direkt nach dem Text, vor Literatur und Verknüpfungen
-      const prev = PATH[step - 1], next = PATH[step + 1];
+      const prev = path[step - 1], next = path[step + 1];
       const big = (m, cls, label) => h("button", { class: cls, type: "button", onclick: () => go(m) },
         h("span", { class: "lbl" }, label), h("span", { class: "ttl" }, m.title));
       root.append(h("nav", { class: "r-pathnav", "aria-label": "Lernpfad" },
@@ -1350,7 +1365,7 @@ details.rel-more .rel-full { margin-left: 0; }
       for (const r of n.refs) {
         const li = h("li", { id: r.key ? `lit-${r.key}` : "" });
         const entry = h("span", { class: "lit-entry" });
-        entry.innerHTML = r.entry; // APA-Angabe aus citeproc (pandoc), Titel und Namen dort maskiert
+        entry.innerHTML = r.entry; // Literaturangabe, im Kern bereinigt (clean_entry, Ersatzform maskiert)
         for (const a of entry.querySelectorAll("a")) { a.target = "_blank"; a.rel = "noopener"; }
         li.append(entry);
         const metaEl = h("span", { class: "lit-meta" });
@@ -1380,7 +1395,7 @@ details.rel-more .rel-full { margin-left: 0; }
       const L = n.license;
       const unknown = L.cls === "unbekannt" && L.known;
       const text = unknown ? "unbekannt" : L.name || L.url || "nicht angegeben";
-      const name = L.url ? h("a", { href: L.url, target: "_blank", rel: "noopener" }, text) : h("span", {}, text);
+      const name = safeHref(L.url) ? h("a", { href: L.url, target: "_blank", rel: "noopener" }, text) : h("span", {}, text);
       const same = unknown || (L.name || "").trim().toLowerCase() === L.label.toLowerCase();
       const lines = [h("p", { class: "r-lic" }, "Lizenz: ", name, " · ", facetBtn("l", L.cls, same ? "weitere Quellen mit dieser Lizenz" : L.label))];
       for (const st of n.stored) lines.push(h("p", { class: "r-lic" }, `Volltext: ${st.path} `, h("span", { class: "r-note" }, st.tracked ? "(von Git versioniert)" : "(lokal, nicht versioniert)")));
@@ -1392,7 +1407,7 @@ details.rel-more .rel-full { margin-left: 0; }
     if (n.apa) {
       // Quellenkarte: Literaturangabe (Vollbeleg) unten, zum Kopieren und als RIS für Literaturverwaltungen
       const entry = h("div", { class: "r-apa" });
-      entry.innerHTML = n.apa; // APA-Angabe aus citeproc (pandoc), Titel und Namen dort maskiert
+      entry.innerHTML = n.apa; // Literaturangabe, im Kern bereinigt (clean_entry, Ersatzform maskiert)
       for (const a of entry.querySelectorAll("a")) { a.target = "_blank"; a.rel = "noopener"; }
       const copy = h("button", { class: "ghost", type: "button" }, "Kopieren");
       copy.addEventListener("click", () => copyText(entry.textContent.replace(/\s+/g, " ").trim(), copy));
@@ -1416,6 +1431,8 @@ details.rel-more .rel-full { margin-left: 0; }
     const go = m => openReader(m, "link"), goFacet = (k, v) => openReader({ facet: [k, v] }, "link");
     if (item.facet) fillFacet(card, item.facet[0], item.facet[1], false, go);
     else fillArticle(card, item, false, go, goFacet);
+    card.dataset.page = item.facet ? "" : item.id;
+    window.okfwEdit?.reader(card, card.dataset.page); // Andockpunkt: nur okfw serve belegt ihn
     reader.hidden = false;
     document.body.classList.add("reading");
     reader.scrollTop = 0;
@@ -1486,15 +1503,24 @@ details.rel-more .rel-full { margin-left: 0; }
   (function learningPath() {
     if (!PATH.length) return;
     const ol = h("ol", { class: "steps" });
-    PATH.forEach((n, i) => ol.append(h("li", { class: "step", onclick: () => openReader(n, "new") },
-      h("span", { class: "step-n", "aria-hidden": "true" }, String(i + 1)),
-      h("button", { class: "linkish", type: "button", "aria-label": `Schritt ${i + 1}: ${n.title}` }, n.title),
-      h("span", { class: "step-k" }, typeDot(n.type), tlabel(n.type)),
-      n.description ? h("span", { class: "step-d" }, n.description) : null)));
+    const note = h("div", { class: "note" });
+    const start = h("button", { class: "btn-primary", type: "button", onclick: () => openReader(scopedPath()[0], "new") }, "Lernpfad starten");
     $("lernpfad").append(h("div", { class: "lern-head" },
-      h("div", {}, h("h2", { id: "lern-h" }, "Lernpfad"),
-        h("div", { class: "note" }, `${PATH.length} ${PATH.length === 1 ? "Seite" : "Seiten"} zum Einlesen, in dieser Reihenfolge`)),
-      h("button", { class: "btn-primary", type: "button", onclick: () => openReader(PATH[0], "new") }, "Lernpfad starten")), ol);
+      h("div", {}, h("h2", { id: "lern-h" }, "Lernpfad"), note), start), ol);
+    function draw() {
+      const path = scopedPath();
+      const part = path.length < PATH.length ? ` (im gewählten ${SC.label}, ${PATH.length} insgesamt)` : "";
+      note.textContent = path.length ? `${path.length} ${path.length === 1 ? "Seite" : "Seiten"} zum Einlesen, in dieser Reihenfolge${part}`
+        : `Keine Seite im gewählten ${SC.label} (${PATH.length} insgesamt)`;
+      start.hidden = !path.length;
+      ol.replaceChildren(...path.map((n, i) => h("li", { class: "step", onclick: () => openReader(n, "new") },
+        h("span", { class: "step-n", "aria-hidden": "true" }, String(i + 1)),
+        h("button", { class: "linkish", type: "button", "aria-label": `Schritt ${i + 1}: ${n.title}` }, n.title),
+        h("span", { class: "step-k" }, typeDot(n.type), tlabel(n.type)),
+        n.description ? h("span", { class: "step-d" }, n.description) : null)));
+    }
+    draw();
+    redrawPath = draw;
     $("lernpfad").hidden = false;
   })();
 
@@ -1651,7 +1677,7 @@ details.rel-more .rel-full { margin-left: 0; }
       const full = fullText(r.n);
       const box = h("input", { type: "checkbox", "aria-label": `${r.n.title} markieren`, onchange: () => { box.checked ? marked.add(r.id) : marked.delete(r.id); command(); } });
       boxes.push(box);
-      return h("li", {},
+      return h("li", { "data-page": r.id },
         h("div", { class: "rel-head" }, box,
           h("button", { class: "linkish", type: "button", onclick: () => openReader(r.n, "new") }, r.n.title),
           h("span", { class: "kind pill" }, typeDot(r.n.type), tlabel(r.n.type)),
@@ -1698,6 +1724,7 @@ details.rel-more .rel-full { margin-left: 0; }
         h("div", { class: "rel-cmd" }, line, copyLine)));
     }
     command();
+    window.okfwEdit?.release(body, pending.map(r => r.id));
     $("relcard").hidden = false;
   })();
 
@@ -1734,6 +1761,7 @@ details.rel-more .rel-full { margin-left: 0; }
   fit();
   update();
   try { if (localStorage.getItem("okfw-view") === "cols") setView("cols"); } catch (e) { /* ohne Speicher */ }
+  window.okfwEdit?.ready({ open: id => { const m = byId.get(id); if (m) openReader(m, "new"); return !!m; } });
 })();
 </script>
 </body>
