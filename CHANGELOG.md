@@ -2,6 +2,17 @@
 
 Je Version steht hier nur das Ergebnis der Prüfungen. Protokolle und Berichte hängen als Anhang am Release, die aus der Zeit vor 0.6.0 gesammelt an 0.6.0.
 
+## 0.7.1 · 2.11.2026
+
+Parlamentsmaterial in `recherche`: die DIP-API des Bundestags, nur lesend. Kern, Hooks und Profile bleiben wie in 0.7.0, im Kern ändert sich nur die Versionsnummer.
+
+Geprüft: Nachbau mit echter Claude-Sitzung, alle Testsuiten, Diff seit 0.7.0, die Prüfungen vor dem Export. Gegen den echten Dienst liefen Aktivitäten, Plenarprotokolle und deren Text. Nicht geprüft: `drucksache-text` und `vorgang` gegen den echten Dienst, `dip-person --name` gegen den echten Dienst, das Verhalten bei 429. Der Bericht hängt am Release.
+
+- **DIP-API des Bundestags in `api.py`, nur lesend.** `suche dip '<endpunkt>?<filter>'`, `dip-person` (Aktivitäten einer Person im Zeitraum) und `dip-dokument` (Protokoll oder
+  Drucksache als Text), jeder Abruf mit derselben Protokollzeile. Der Key kommt aus `DIP_API_KEY` oder dem Schlüsselbund (`dip-api-key`) und geht nur im Kopf an den Dienst. Ein Name, der mehrere
+  Personen trifft, führt zu keiner Auswahl. Ein Protokolltext, der sich als vorläufig ankündigt, wird benannt. `archivieren` nimmt `nachschlagen/` mit. `api.py` prüft TLS unter macOS zusätzlich
+  gegen die Wurzeln des Systems, weil dem Python von `uv` sonst die Wurzel des DIP-Hosts fehlt.
+
 ## 0.7.0 · 2.11.2026
 
 Im Dashboard arbeiten: Quellen hineinkippen, Pfade und Vortrag, Modellaufträge im Hintergrund, Schaubilder, Ablösen und Löschen, neue Gestaltung.

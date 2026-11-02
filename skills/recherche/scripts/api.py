@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Offizielle Literatur-APIs mit Fundprotokoll: Zugangsweg 2 der Literaturrecherche.
+"""Offizielle Literatur- und Parlaments-APIs mit Fundprotokoll: Zugangsweg 2 der Recherche.
 
   api.py suche <dienst> "<suchstring>" --lauf DIR [--max 20] [--by AKTEUR]   # --max bis 2000, seitenweise
   api.py eintrag DIR --weg modellvorschlag|container|websuche|tooluniverse --db DB --query Q --treffer JSON --by A
@@ -15,9 +15,11 @@
   api.py anker ENTWURF VOLLTEXT
   api.py pruefen DIR
   api.py archivieren DIR
+  api.py dip-person --lauf DIR (--person-id N | --name "Nachname Vorname") [--von D] [--bis D] [--art Rede] [--filter f.x=y]
+  api.py dip-dokument plenarprotokoll|drucksache <id|wp/nr> --lauf DIR --out DATEI.txt
   api.py dienste
 
-Dienste: pubmed, europepmc, crossref, openalex, semanticscholar, arxiv, cellar (SPARQL).
+Dienste: pubmed, europepmc, crossref, openalex, semanticscholar, arxiv, cellar (SPARQL), dip (Bundestag, nur lesend).
 Nur die Hosts in HOSTS (Port 443), auch bei Weiterleitungen; alles andere lehnt das Skript ab.
 Schlüsselköpfe gehen bei einer Weiterleitung nie an einen anderen Host. Antworten über MAX_ANTWORT
 (64 MB, auch entpackt) sind ein Fehler. Ersetzt curl für diese Dienste: Hostliste und Protokoll
@@ -25,12 +27,14 @@ liegen an einer Stelle. Jeder Suchaufruf hängt eine Zeile an DIR/api.jsonl an,
 auch wenn er scheitert (bis dahin geholte Treffer bleiben im Eintrag). Der Suchstring wird nie
 verändert: Filter gehören in die Syntax des Dienstes.
 Schlüssel nur aus der Umgebung, nie im Protokoll: NCBI_API_KEY (Abstand 0,11 s statt 0,34 s),
-OPENALEX_API_KEY, S2_API_KEY (auch SEMANTIC_SCHOLAR_API_KEY). Ablage mit `archivieren`: im ignorierten
+OPENALEX_API_KEY, S2_API_KEY (auch SEMANTIC_SCHOLAR_API_KEY). DIP_API_KEY, sonst Schlüsselbund-Eintrag dip-api-key;
+ohne Schlüssel antwortet DIP nicht. Ablage mit `archivieren`: im ignorierten
 Projektordner protokoll/recherche, sonst unter OKFW_RECHERCHE_PROTOKOLL (Voreinstellung ~/.claude/recherche-protokoll).
 Metadaten für Quellenkarten holt der Wiki-Kern (okfw.py new source --doi/--pmid/--arxiv).
 """
 import argparse
 import gzip
+import hashlib
 import html
 import http.client
 import io
@@ -39,6 +43,7 @@ import os
 import re
 import shlex
 import shutil
+import ssl
 import subprocess
 import sys
 import time
@@ -54,6 +59,12 @@ UA = "okf-recherche/1.0 (api.py)"
 TOOL = "okf-recherche"
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
 EPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest/"
+DIP = "https://search.dip.bundestag.de/api/v1/"
+DIP_SCHLUESSELBUND = "dip-api-key"
+SYSTEMWURZELN = "/System/Library/Keychains/SystemRootCertificates.keychain"
+DIP_VORLAEUFIG = "Der gesamte und damit endgültige Stenografische Bericht"  # so kündigt der Text sich selbst als Teil an
+DIP_QUELLE = "Deutscher Bundestag/Bundesrat – DIP"  # Wortlaut laut Nutzungsbedingungen, Nr. 4c
+DIP_LISTEN = ("vorgang", "vorgangsposition", "drucksache", "plenarprotokoll", "aktivitaet", "person")
 KERN_PFAD = Path(__file__).resolve().parents[2] / "okfw" / "okfw.py"
 KERN = (f'uv run --no-config --quiet "{KERN_PFAD}"' if not re.search(r'["$`\\]', str(KERN_PFAD))
         else f"uv run --no-config --quiet {shlex.quote(str(KERN_PFAD))}")
@@ -66,6 +77,7 @@ HOSTS = {  # Host → kleinster Abstand zwischen zwei Anfragen in Sekunden (E-Ut
     "api.semanticscholar.org": 1.1,
     "export.arxiv.org": 3.0,
     "publications.europa.eu": 0.2,
+    "search.dip.bundestag.de": 0.2,
 }
 PORTS: dict[str, set[int]] = {}  # Host → zusätzlich erlaubte Ports; leer: nur der Standardport 443
 MAX_ANTWORT = 64 * 1024 * 1024  # Bytes, roh und entpackt
@@ -73,7 +85,7 @@ KOPF_NUR_SELBER_HOST = ("key", "token", "authorization", "cookie")  # Teile von 
 WEGE = ("tooluniverse", "api", "websuche", "container", "modellvorschlag")
 FUNDWEG_ARTEN = ("suche", "modellvorschlag", "material", "person", "zitatverfolgung")  # wie FUNDWEG_ARTEN in okfw.py
 PFLICHT = ("weg", "db", "query", "at", "by", "treffer")
-KENNUNGEN = ("doi", "pmid", "pmcid", "arxiv", "celex")
+KENNUNGEN = ("doi", "pmid", "pmcid", "arxiv", "celex", "dip")
 _zuletzt: dict[str, float] = {}
 MAX_TREFFER = 2000  # Obergrenze für --max
 ANZEIGE = 50  # so viele Treffer zeigt `suche` auf dem Bildschirm; das Protokoll hat alle
@@ -85,7 +97,8 @@ WIEDERHOLBAR = (429, 500, 502, 503, 504)
 ABBRUCH = (http.client.HTTPException, ConnectionError, TimeoutError, urllib.error.URLError)
 ABBRUCH_WIEDERHOLUNGEN = 2  # abgebrochene Verbindung, IncompleteRead (OpenAlex bricht große Antworten oft ab)
 STANDARD_BY = "claude-code/recherche"  # Akteur im Protokoll, wenn weder --by noch RECHERCHE_BY gesetzt ist
-GEHEIM = ("NCBI_API_KEY", "OPENALEX_API_KEY", "S2_API_KEY", "SEMANTIC_SCHOLAR_API_KEY")
+GEHEIM = ("NCBI_API_KEY", "OPENALEX_API_KEY", "S2_API_KEY", "SEMANTIC_SCHOLAR_API_KEY", "DIP_API_KEY")
+_aus_schluesselbund: set[str] = set()  # dieselbe Schwärzung für Werte, die nicht aus der Umgebung kommen
 GEHEIME_PARAMETER = ("api_key", "apikey", "key", "access_token", "token", "sig", "signature",
                      "secret", "client_secret", "password", "passwd", "pwd", "auth", "credential",
                      "credentials")  # URL-Parameter mit Schlüsseln
@@ -134,7 +147,22 @@ class _NurErlaubte(urllib.request.HTTPRedirectHandler):
         return neu
 
 
-_OPENER = urllib.request.build_opener(_NurErlaubte)
+def tls_kontext() -> ssl.SSLContext:
+    """Die übliche Prüfung, unter macOS zusätzlich mit den Wurzeln des Systems: Das Python von uv liest nur
+    /etc/ssl/cert.pem, dort fehlt etwa ISRG Root X2, auf die search.dip.bundestag.de endet."""
+    kontext = ssl.create_default_context()
+    if sys.platform == "darwin" and shutil.which("security"):
+        try:
+            lauf = subprocess.run(["security", "find-certificate", "-a", "-p", SYSTEMWURZELN],
+                                  capture_output=True, text=True, timeout=10)
+            if lauf.returncode == 0 and "BEGIN CERTIFICATE" in lauf.stdout:
+                kontext.load_verify_locations(cadata=lauf.stdout)
+        except (OSError, subprocess.SubprocessError, ssl.SSLError, ValueError):
+            pass  # dann gilt die übliche Liste; der Abruf scheitert höchstens mit einem Fehler im Protokoll
+    return kontext
+
+
+_OPENER = urllib.request.build_opener(_NurErlaubte, urllib.request.HTTPSHandler(context=tls_kontext()))
 
 
 def abstand(host: str) -> float:
@@ -202,7 +230,8 @@ def eutils(befehl: str, **p) -> str:
 
 def schwaerzen(x):
     """Schlüssel aus der Umgebung und `api_key=…` in allen Zeichenketten unkenntlich machen."""
-    geheim = [f for k in GEHEIM if len(v := os.environ.get(k, "")) >= 4
+    werte = [os.environ.get(k, "") for k in GEHEIM] + sorted(_aus_schluesselbund)
+    geheim = [f for v in werte if len(v) >= 4
               for f in {v, urllib.parse.quote(v, safe=""), urllib.parse.quote_plus(v)}]
 
     def eins(t: str) -> str:
@@ -416,6 +445,89 @@ def s_cellar(q, n, st):
                        for i, r in enumerate(rows[:n], 1))
 
 
+def dip_schluessel() -> str:
+    """Aus der Umgebung, sonst aus dem Schlüsselbund; der Wert steht nie in einer URL und nie im Protokoll."""
+    key = os.environ.get("DIP_API_KEY", "").strip()
+    if not key:
+        if sys.platform == "darwin" and shutil.which("security"):
+            lauf = subprocess.run(["security", "find-generic-password", "-s", DIP_SCHLUESSELBUND, "-w"],
+                                  capture_output=True, text=True, timeout=60)
+        elif shutil.which("secret-tool"):
+            lauf = subprocess.run(["secret-tool", "lookup", "service", DIP_SCHLUESSELBUND],
+                                  capture_output=True, text=True, timeout=60)
+        else:
+            lauf = None
+        key = lauf.stdout.strip() if lauf and lauf.returncode == 0 else ""
+        _aus_schluesselbund.update({key} - {""})
+    if not key:
+        raise ValueError(f"DIP-API-Key fehlt: DIP_API_KEY setzen oder Schlüsselbund-Eintrag {DIP_SCHLUESSELBUND} anlegen "
+                         "(in der Bash-Sandbox ist der Schlüsselbund gesperrt)")
+    return key
+
+
+def hole_dip(url: str):
+    return hole_json(url, headers={"Authorization": f"ApiKey {dip_schluessel()}"})
+
+
+def dip_anfrage(q: str) -> tuple[str, list[tuple[str, str]]]:
+    """`<endpunkt>?f.x=y&…` zerlegen. Schlüssel, Cursor und Format setzt das Skript, darum nur Filter."""
+    endpunkt, _, rest = q.strip().partition("?")
+    if endpunkt not in DIP_LISTEN:
+        raise ValueError(f"DIP: Endpunkt {endpunkt!r} ist keiner von {', '.join(DIP_LISTEN)}")
+    paare = urllib.parse.parse_qsl(rest, keep_blank_values=True, strict_parsing=bool(rest))
+    fremd = sorted({k for k, _ in paare if not k.startswith("f.")})
+    if fremd:
+        raise ValueError(f"DIP: nur Filter f.*, nicht {', '.join(fremd)}")
+    return endpunkt, paare
+
+
+def dip_fundstelle(f: dict) -> str | None:
+    """Wie DIP selbst zitiert: „BT-Plenarprotokoll 19/1, S. 4292B“."""
+    if not f.get("dokumentnummer"):
+        return None
+    ort = f"{'-'.join(x for x in (f.get('herausgeber'), f.get('dokumentart')) if x)} {f['dokumentnummer']}"
+    return f"{ort}, S. {f['seite']}" if f.get("seite") else ort
+
+
+def dip_treffer(rang: int, endpunkt: str, d: dict) -> dict:
+    f = d.get("fundstelle") or {}
+    return treffer(rang, dip=f"{endpunkt}/{d.get('id')}", titel=d.get("titel"), jahr=d.get("datum"), datum=d.get("datum"),
+                   typ=d.get("aktivitaetsart") or d.get("drucksachetyp") or d.get("vorgangstyp") or d.get("typ"),
+                   fundstelle=dip_fundstelle(f), url=f.get("pdf_url"), xml=f.get("xml_url"), dokument=f.get("id"),
+                   top=f.get("top"), person_id=d.get("person_id"), wahlperiode=d.get("wahlperiode"),
+                   vorgaenge=[{k: v.get(k) for k in ("id", "titel", "vorgangsposition") if v.get(k)}
+                              for v in d.get("vorgangsbezug") or []], beschluss=d.get("beschlussfassung"),
+                   aktualisiert=d.get("aktualisiert"), quelle=DIP_QUELLE)
+
+
+def s_dip(q, n, st):
+    """Der Dienst kennt keine Seitengröße: Folgeseiten per cursor, bis er sich nicht mehr ändert. Nach der Art einer
+    Aktivität filtert er nicht; st["nur_art"] sortiert darum hier aus und hält im Protokoll fest, wie viele gesichtet wurden."""
+    endpunkt, paare = dip_anfrage(q)
+    art = st.get("nur_art")
+    if art and endpunkt != "aktivitaet":
+        raise ValueError("DIP: --art gilt nur für aktivitaet")
+    liste, cursor, gesichtet = st["liste"], None, 0
+    st["parameter"]["format"] = "json"
+    if art:
+        st["parameter"]["art_hier_gefiltert"] = art
+    while len(liste) < n:
+        url = DIP + endpunkt + "?" + urllib.parse.urlencode([*paare, ("format", "json"), *([("cursor", cursor)] if cursor else [])])
+        seite(st, url)
+        r = hole_dip(url)
+        st["n_gesamt"] = r.get("numFound")
+        dokumente = r.get("documents") or []
+        for d in dokumente:
+            gesichtet += 1
+            if len(liste) < n and (not art or d.get("aktivitaetsart") == art):
+                liste.append(dip_treffer(len(liste) + 1, endpunkt, d))
+        if art:
+            st["parameter"]["n_gesichtet"] = gesichtet
+        if not dokumente or gesichtet >= (st["n_gesamt"] or 0) or not r.get("cursor") or r["cursor"] == cursor:
+            break
+        cursor = r["cursor"]
+
+
 DIENSTE = {
     "pubmed": (s_pubmed, "PubMed-Syntax, z. B. metformin[tiab] AND 2020:2026[dp]"),
     "europepmc": (s_europepmc, "Europe-PMC-Syntax, z. B. \"drug safety\" AND PUB_YEAR:[2020 TO 2026] AND OPEN_ACCESS:y"),
@@ -424,15 +536,19 @@ DIENSTE = {
     "semanticscholar": (s_semanticscholar, "Freitext; optional S2_API_KEY (sonst gedrosselt); höchstens 1000 Treffer"),
     "arxiv": (s_arxiv, "arXiv-Syntax, z. B. ti:\"retrieval augmented\" AND cat:cs.CL"),
     "cellar": (s_cellar, "SPARQL auf den Cellar des EU-Amts für Veröffentlichungen; Variablen celex, title, date, work"),
+    "dip": (s_dip, "Bundestag, <endpunkt>?<filter>, z. B. aktivitaet?f.person_id=2413&f.datum.start=2026-01-01; braucht Key"),
 }
 
 
 # ---------------------------------------------------------------- Protokoll
 
-def kein_symlink(datei: Path) -> None:
-    """Der Lauf-Ordner kann aus einem fremden Wiki stammen; ein Symlink lenkte das Schreiben sonst aus ihm hinaus."""
-    if datei.is_symlink():
-        sys.exit(f"{datei} ist ein symbolischer Link: nicht geschrieben")
+def kein_symlink(datei: Path, unter: Path | None = None) -> None:
+    """Der Lauf-Ordner kann aus einem fremden Wiki stammen; ein Symlink lenkte das Schreiben sonst aus ihm hinaus.
+    Mit `unter` gilt das auch für die Ordner zwischen diesem Ordner und der Datei."""
+    zwischen = [p for p in datei.absolute().parents if unter.absolute() in p.parents] if unter else []
+    for teil in (datei, *zwischen):
+        if teil.is_symlink():
+            sys.exit(f"{teil} ist ein symbolischer Link: nicht geschrieben")
 
 
 def liste_laden(datei: Path, pflicht: str) -> list[dict]:
@@ -450,15 +566,15 @@ def anhaengen(datei: Path, eintrag: dict) -> None:
         f.write(json.dumps(eintrag, ensure_ascii=False) + "\n")
 
 
-def cmd_suche(a) -> int:
-    lauf = Path(a.lauf).expanduser()
-    n = max(1, min(a.max, MAX_TREFFER))
-    st = {"liste": [], "n_gesamt": None, "url": None, "parameter": {}, "seiten": 0}
-    eintrag = {"v": 1, "lauf": lauf.name, "weg": "api", "db": f"api:{a.dienst}", "werkzeug": "api.py suche",
-               "query": a.query, "parameter": {}, "at": jetzt(), "by": a.by, "n_gesamt": None, "n_geliefert": 0,
+def abruf(lauf: Path, dienst: str, query: str, gewollt: int, by: str, werkzeug: str, tun, **vorgabe) -> dict:
+    """Ein Abruf, eine Protokollzeile, auch wenn er scheitert."""
+    n = max(1, min(gewollt, MAX_TREFFER))
+    st = {"liste": [], "n_gesamt": None, "url": None, "parameter": {}, "seiten": 0, **vorgabe}
+    eintrag = {"v": 1, "lauf": lauf.name, "weg": "api", "db": f"api:{dienst}", "werkzeug": werkzeug,
+               "query": query, "parameter": {}, "at": jetzt(), "by": by, "n_gesamt": None, "n_geliefert": 0,
                "url": None, "treffer": [], "fehler": None}
     try:
-        DIENSTE[a.dienst][0](a.query, n, st)
+        tun(query, n, st)
     except Abgelehnt as e:
         eintrag["fehler"] = f"abgelehnt: {e}"
     except Exception as e:  # jeder Fehlschlag gehört ins Protokoll; bisherige Treffer bleiben
@@ -471,19 +587,93 @@ def cmd_suche(a) -> int:
     liste = st["liste"][:n]
     if st["seiten"] > 1:
         st["parameter"]["seiten"] = st["seiten"]
-    if a.max > MAX_TREFFER:
+    if gewollt > MAX_TREFFER:
         st["parameter"]["max_begrenzt_auf"] = MAX_TREFFER
     eintrag.update({"parameter": st["parameter"], "n_gesamt": st["n_gesamt"], "n_geliefert": len(liste),
                     "url": ohne_schluessel(st["url"]) if st["url"] else None, "treffer": liste})
     eintrag = schwaerzen(eintrag)
     anhaengen(lauf / "api.jsonl", eintrag)
+    return eintrag
+
+
+def zeige_abruf(eintrag: dict, lauf: Path) -> int:
     kurz = {k: eintrag[k] for k in ("db", "query", "at", "n_gesamt", "n_geliefert", "fehler")}
-    kurz["treffer"] = [{k: t[k] for k in ("rang", *KENNUNGEN, "titel", "jahr") if k in t}
+    kurz["treffer"] = [{k: t[k] for k in ("rang", *KENNUNGEN, "titel", "jahr", "datum", "typ", "fundstelle") if k in t}
                        for t in eintrag["treffer"][:ANZEIGE]]
     if len(eintrag["treffer"]) > ANZEIGE:
         kurz["hinweis"] = f"nur die ersten {ANZEIGE} von {len(eintrag['treffer'])} Treffern angezeigt; alle stehen in {lauf / 'api.jsonl'}"
     print(json.dumps(kurz, ensure_ascii=False, indent=1))
     return 2 if eintrag["fehler"] else 0
+
+
+def cmd_suche(a) -> int:
+    lauf = Path(a.lauf).expanduser()
+    return zeige_abruf(abruf(lauf, a.dienst, a.query, a.max, a.by, "api.py suche", DIENSTE[a.dienst][0]), lauf)
+
+
+def cmd_dip_person(a) -> int:
+    """Aktivitäten einer Person im Zeitraum. Ein Name führt nur weiter, wenn er genau eine Person trifft: Das
+    Nachschlagen steht in LAUF/nachschlagen, und bei Namensgleichen wird nicht geraten."""
+    lauf = Path(a.lauf).expanduser()
+    pid = a.person_id
+    if pid is None:
+        q = "person?" + urllib.parse.urlencode({"f.person": a.name})
+        ort = lauf / "nachschlagen"
+        kein_symlink(ort)
+        e = abruf(ort, "dip", q, 20, a.by, "api.py dip-person", s_dip)
+        if e["fehler"] or e["n_gesamt"] != 1 or not e["treffer"]:
+            rc = zeige_abruf(e, ort)
+            print(f"{e['n_gesamt'] or 0} Personen zu {a.name!r}: mit --person-id wählen, nicht geraten", file=sys.stderr)
+            return rc or 1
+        pid = e["treffer"][0]["dip"].rsplit("/", 1)[-1]
+    filter_ = [("f.person_id", str(pid))]
+    filter_ += [("f.datum.start", a.von)] if a.von else []
+    filter_ += [("f.datum.end", a.bis)] if a.bis else []
+    filter_ += [tuple(f.split("=", 1)) if "=" in f else sys.exit(f"--filter {f!r}: f.x=y erwartet") for f in a.filter]
+    q = "aktivitaet?" + urllib.parse.urlencode(filter_)
+    return zeige_abruf(abruf(lauf, "dip", q, a.max, a.by, "api.py dip-person", s_dip, nur_art=a.art), lauf)
+
+
+def cmd_dip_dokument(a) -> int:
+    """Volltext und Metadaten einer Drucksache oder eines Protokolls als Text, Wortlaut unverändert. Ins Protokoll
+    kommen Metadaten und die Prüfsumme des Texts, nie der Text. Eine Dokumentnummer muss genau ein Dokument treffen."""
+    lauf, ziel = Path(a.lauf).expanduser(), Path(a.out).expanduser()
+    endpunkt = f"{a.art}-text"
+    if re.fullmatch(r"\d+", a.kennung):
+        q = f"{endpunkt}/{a.kennung}"
+    elif re.fullmatch(r"\d+/\d+", a.kennung):
+        q = f"{endpunkt}?" + urllib.parse.urlencode({"f.dokumentnummer": a.kennung})
+    else:
+        sys.exit(f"{a.kennung!r}: DIP-ID oder Dokumentnummer wie 21/34 erwartet")
+
+    def tun(q, n, st):
+        url = DIP + q + ("&" if "?" in q else "?") + "format=json"
+        seite(st, url)
+        r = hole_dip(url)
+        docs = r.get("documents") if "?" in q else [r]
+        st["n_gesamt"] = r.get("numFound", 1)
+        if len(docs or []) != 1 or st["n_gesamt"] != 1:
+            st["liste"].extend(dip_treffer(i, a.art, d) for i, d in enumerate(docs or [], 1))
+            raise ValueError(f"{st['n_gesamt']} Dokumente zu {a.kennung}: mit der DIP-ID wählen")
+        d = docs[0]
+        text = d.get("text") or ""
+        if not text.strip():
+            raise ValueError("DIP liefert zu diesem Dokument keinen Volltext")
+        kein_symlink(ziel, unter=lauf)
+        ziel.parent.mkdir(parents=True, exist_ok=True)
+        f = d.get("fundstelle") or {}
+        vorlaeufig = DIP_VORLAEUFIG in text
+        ziel.write_text(f"# {d.get('titel', '')}\nQuelle: {DIP_QUELLE}, API {q}, abgerufen {jetzt()}. "
+                        f"Fundstelle: {dip_fundstelle(f) or '–'}. PDF: {f.get('pdf_url') or '–'}. "
+                        f"MD5 des PDF laut API: {d.get('pdf_hash') or '–'}.\n"
+                        + ("ACHTUNG: Der Text nennt sich vorläufig, ganze Reden können fehlen. Am PDF prüfen.\n" if vorlaeufig else "")
+                        + f"\n## Text\n\n{text}\n", encoding="utf-8")
+        st["parameter"].update(sha256_text=hashlib.sha256(text.encode("utf-8")).hexdigest(), zeichen=len(text))
+        if vorlaeufig:
+            st["parameter"]["vorlaeufig"] = True
+            print(f"Hinweis: {a.kennung} ist laut Text vorläufig, ganze Reden können fehlen; am PDF prüfen", file=sys.stderr)
+        st["liste"].append(dip_treffer(1, a.art, d))
+    return zeige_abruf(abruf(lauf, "dip", q, 20, a.by, "api.py dip-dokument", tun), lauf)
 
 
 def cmd_eintrag(a) -> int:
@@ -594,6 +784,8 @@ def cmd_pruefen(a) -> int:
 
 
 def schluessel(t: dict) -> list[str]:
+    if t.get("dip"):  # Aktivitäten einer Person tragen alle denselben Titel; Titel und Jahr unterscheiden sie nicht
+        return [f"dip:{t['dip']}"]
     keys = [f"{k}:{str(t[k]).lower()}" for k in KENNUNGEN if t.get(k)]
     titel = norm_titel(t.get("titel"))
     if len(titel) > 20:
@@ -615,6 +807,8 @@ def zusammenfuehren(lauf: Path) -> tuple[list[dict], list[str]]:
     alle, nach_schluessel = [], {}
     aufl = lade_aufloesungen(lauf)
     for e in eintraege:
+        if e.get("werkzeug") == "api.py dip-dokument":  # ein geholter Text ist kein Fund
+            continue
         for t in e["treffer"]:
             if e["weg"] == "websuche" and t.get("url") in aufl:
                 z = aufl[t["url"]]
@@ -631,9 +825,9 @@ def zusammenfuehren(lauf: Path) -> tuple[list[dict], list[str]]:
         gruppen.setdefault(wurzel(i), []).append(paar)
     kandidaten = []
     for paare in gruppen.values():
-        k = {"titel": None, "jahr": None, **{x: None for x in KENNUNGEN}, "url": None, "funde": []}
+        k = {"titel": None, "jahr": None, **{x: None for x in KENNUNGEN}, "url": None, "fundstelle": None, "funde": []}
         for e, t in sorted(paare, key=lambda p: p[0]["weg"] == "websuche"):  # Metadaten der APIs zuerst
-            for feld in ("titel", "jahr", *KENNUNGEN, "url"):
+            for feld in ("titel", "jahr", *KENNUNGEN, "url", "fundstelle"):
                 k[feld] = k[feld] or t.get(feld)
             fund = {"weg": e["weg"], "db": e["db"], "query": e["query"], "at": e["at"], "by": e["by"],
                     "rang": t.get("rang"), "ort": e["_ort"],
@@ -676,7 +870,7 @@ def cmd_zusammenfuehren(a) -> int:
         print(f"| {e['weg']} | {e['db']} | `{q}` | {at} | {n} | {len(e['treffer'])} |")
     print(f"\n| Nr | Titel | Jahr | Kennung | Wege | DBs | Funde (Datenbank: Rang) |\n|---|---|---|---|---|---|---|")
     for k in kandidaten:
-        titel = (k.get("titel") or "–")[:80]
+        titel = (k.get("titel") or "–")[:80] + (f" · {k['fundstelle']}" if k.get("fundstelle") else "")
         funde = ", ".join(f"{f['db']}: {f['rang']}" for f in k["funde"])
         print(f"| {k['nr']} | {titel} | {k.get('jahr', '–')} | {kennung(k)} | {', '.join(k['wege'])} | "
               f"{len({f['db'] for f in k['funde']})} | {funde} |")
@@ -970,11 +1164,13 @@ def protokoll_ziel(name: str) -> Path:
 def cmd_archivieren(a) -> int:
     lauf = Path(a.lauf).expanduser()
     ziel = protokoll_ziel(lauf.name)
-    dateien = [p for p in lauf.iterdir() if p.suffix in (".jsonl", ".json") and p.is_file() and not p.is_symlink()]
+    dateien = [p for ort in (lauf, lauf / "nachschlagen") if ort.is_dir() and not ort.is_symlink() for p in ort.iterdir()
+               if p.suffix in (".jsonl", ".json") and p.is_file() and not p.is_symlink()]
     try:
         ziel.mkdir(parents=True, exist_ok=True)
         for p in dateien:
-            shutil.copy2(p, ziel / p.name)
+            (ziel / p.relative_to(lauf)).parent.mkdir(exist_ok=True)
+            shutil.copy2(p, ziel / p.relative_to(lauf))
     except OSError as e:
         sys.exit(f"{ziel}: {e}. In der Bash-Sandbox ist der globale Ordner gesperrt; Aufruf außerhalb der Sandbox wiederholen.")
     print(f"{len(dateien)} Dateien (Protokolle, Auftrag, Kandidaten; keine Volltexte) → {ziel}")
@@ -1053,6 +1249,25 @@ def baue_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("archivieren", help="Protokolle eines Laufs dauerhaft ablegen")
     w.add_argument("lauf")
     w.set_defaults(f=cmd_archivieren)
+    x = sub.add_parser("dip-person", help="DIP: Aktivitäten einer Person im Zeitraum, protokolliert")
+    wer = x.add_mutually_exclusive_group(required=True)
+    wer.add_argument("--person-id", type=int)
+    wer.add_argument("--name", help='"Nachname Vorname"; muss genau eine Person treffen')
+    x.add_argument("--von", help="JJJJ-MM-TT")
+    x.add_argument("--bis", help="JJJJ-MM-TT")
+    x.add_argument("--art", help="nur diese Aktivitätsart, z. B. Rede; filtert das Skript, der Dienst kann es nicht")
+    x.add_argument("--filter", action="append", default=[], metavar="f.x=y", help="weiterer DIP-Filter, mehrfach")
+    x.add_argument("--lauf", required=True)
+    x.add_argument("--max", type=int, default=20)
+    x.add_argument("--by", default=os.environ.get("RECHERCHE_BY", STANDARD_BY))
+    x.set_defaults(f=cmd_dip_person)
+    x = sub.add_parser("dip-dokument", help="DIP: Protokoll oder Drucksache als Text, protokolliert")
+    x.add_argument("art", choices=["plenarprotokoll", "drucksache"])
+    x.add_argument("kennung", help="DIP-ID oder Dokumentnummer wie 21/34")
+    x.add_argument("--lauf", required=True)
+    x.add_argument("--out", required=True)
+    x.add_argument("--by", default=os.environ.get("RECHERCHE_BY", STANDARD_BY))
+    x.set_defaults(f=cmd_dip_dokument)
     d = sub.add_parser("dienste", help="Dienste, Syntax, Hosts")
     d.set_defaults(f=cmd_dienste)
     return p

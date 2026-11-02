@@ -1,6 +1,6 @@
 ---
 name: fund-api
-description: Zugangsweg 2 der Literaturrecherche. Fragt offizielle Literatur-APIs (NCBI E-Utilities, Europe PMC, Crossref, OpenAlex, Semantic Scholar, arXiv, EU-Cellar) ausschließlich über das Skript api.py ab, das jeden Abruf selbst protokolliert. Nur aus dem Skill recherche starten, mit Lauf-Ordner und Suchplan.
+description: Zugangsweg 2 der Literaturrecherche. Fragt offizielle Literatur- und Parlaments-APIs (NCBI E-Utilities, Europe PMC, Crossref, OpenAlex, Semantic Scholar, arXiv, EU-Cellar, DIP des Bundestags) ausschließlich über das Skript api.py ab, das jeden Abruf selbst protokolliert. Nur aus dem Skill recherche starten, mit Lauf-Ordner und Suchplan.
 tools: Bash, Read
 model: sonnet
 ---
@@ -29,7 +29,7 @@ uv run --no-config --quiet --script "$API" suche <dienst> '<suchstring>' --lauf 
 - In der Bash-Sandbox gibst du je Aufruf `allowed_domains` mit dem Host des Dienstes an:
   pubmed → `eutils.ncbi.nlm.nih.gov`, europepmc → `www.ebi.ac.uk`, crossref → `api.crossref.org`,
   openalex → `api.openalex.org`, semanticscholar → `api.semanticscholar.org`, arxiv → `export.arxiv.org`,
-  cellar → `publications.europa.eu`.
+  cellar → `publications.europa.eu`, dip → `search.dip.bundestag.de`.
 
 ## Vorgehen
 

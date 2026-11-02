@@ -30,7 +30,8 @@ Ohne beides nachfragen (in /goal-Läufen die Frage aus der Bedingung nehmen). `-
 
 - `api.py` ist der Standard; es läuft ohne Einrichtung. `NCBI_API_KEY`, `OPENALEX_API_KEY` und `S2_API_KEY` (auch
   `SEMANTIC_SCHOLAR_API_KEY`) in der Umgebung erhöhen die Grenzen der Dienste; ohne Key scheitern OpenAlex und Semantic Scholar
-  oft am Kontingent, der Fehler steht im Protokoll.
+  oft am Kontingent, der Fehler steht im Protokoll. Nur `dip` braucht zwingend einen Key: `DIP_API_KEY` oder der
+  Schlüsselbund-Eintrag `dip-api-key`, nie im Repo; ohne ihn steht der Fehler im Protokoll.
 - Ist ToolUniverse eingerichtet, sucht es für den Hauptsuchstring mit: Die Gesamtzahlen sind die **Gegenprobe**.
 - Websuche-Treffer werden über `api` aufgelöst (`api.py aufloesen`) oder verworfen. Ohne Docker-Laufzeit und Token
   bleibt der Weg als offen stehen, der Rest läuft weiter.
@@ -100,6 +101,34 @@ Ohne beides nachfragen (in /goal-Läufen die Frage aus der Bedingung nehmen). `-
 Nichts, was eine Entscheidung der Person braucht, still entscheiden: Freigaben für Seiten, Lizenz „erst fragen“,
 zurückgezogene Arbeiten. Die betroffene Quelle als **offen** im Nachweis führen und mit den anderen weitermachen.
 
+## Parlamentsmaterial über `dip`
+
+Die DIP-API des Bundestags liefert Vorgänge, Vorgangspositionen, Drucksachen, Plenarprotokolle, Aktivitäten und Personen, nur
+lesend. Eine Karte zu einer Rede zitiert das Dokument mit Seite, nicht den Metadatensatz.
+
+```bash
+$A dip-person --name "Nachname Vorname" --von 2026-10-01 --bis 2026-10-31 --art Rede --lauf "$LAUF"   # oder --person-id N
+$A dip-dokument plenarprotokoll 21/34 --lauf "$LAUF" --out "$LAUF/text/21-34.txt"                     # oder drucksache, DIP-ID
+$A suche dip 'drucksache?f.wahlperiode=21&f.datum.start=2026-10-01' --lauf "$LAUF"
+```
+
+- Ein Name muss genau eine Person treffen. Das Nachschlagen steht in `LAUF/nachschlagen`, bei Namensgleichen `--person-id`.
+- `--art` filtert das Skript, weil der Dienst es nicht kann; das Protokoll nennt `art_hier_gefiltert` und `n_gesichtet`, und
+  `n_gesamt` zählt alle Aktivitäten vor diesem Filter. Der Wert gilt genau: `Rede` trifft `Rede (zu Protokoll gegeben)` nicht.
+- Die Seite steht nur an der Aktivität. Der Text aus `dip-dokument` hat keine Seitenzahlen und kann auch Wochen später noch
+  vorläufig sein, ganze Reden fehlen dann (`vorlaeufig` im Protokoll, Hinweis in der Datei). Maßgeblich ist das PDF: Seite und
+  Wortlaut dort prüfen. Fehlt der Hinweis, ist der Text damit nicht als vollständig belegt.
+- Namentliche Abstimmungen: `vorgangsposition` nennt in `beschluss` Art und Gesamtergebnis, kein Votum je Person.
+- `dip` liefert Fundstellen. Es urteilt nicht über Personen und nicht darüber, ob eine Aussage stimmt.
+- **Nutzungsbedingungen (Stand 27.2.2023):** Weitergabe nur mit der Quelle „Deutscher Bundestag/Bundesrat – DIP“, bei zitierten
+  Dokumenten zusätzlich BT-PlPr. oder BT-Drs. und Nummer; Veränderungen kenntlich machen, PDFs nicht verändern. Untersagt ist jede
+  Nutzung in sinnentstellendem Zusammenhang oder die zur Herabwürdigung von Personen führen könnte: Das vor jeder Veröffentlichung
+  prüfen und im Zweifel die Person fragen. Lizenz der Karte: `$K lizenz sources/<slug> --name "DIP-Nutzungsbedingungen" --url "https://dip.bundestag.de/%C3%BCber-dip/nutzungsbedingungen" --via originaldokument`.
+- Höchstens 25 Anfragen gleichzeitig; weitere Grenzen nennt der Bundestag nicht. Der öffentliche Key auf der Hilfeseite ist befristet und kann kurzfristig wechseln, ein dauerhafter kommt
+  auf formlose E-Mail an die Parlamentsdokumentation. Änderungen erscheinen in der API mit rund 15 Minuten Versatz, und `aktualisiert` belegt keine Änderung am Inhalt.
+- Reden enthalten politische Meinungen namentlich genannter Personen: personenbezogene Daten, möglicherweise besondere Kategorien
+  nach Art. 9 DSGVO. Solche Texte gehen nur an Modelle und Anbieter, die dafür zugelassen sind.
+
 ## Nachweis (fester Abschluss, sichtbar im Chat)
 
 ```
@@ -121,8 +150,8 @@ Protokoll: <archivierter Pfad>
 Nur Standardbibliothek, nur HTTPS (Port 443) zu den Hosts der offiziellen APIs (auch bei Weiterleitungen; Schlüsselköpfe gehen
 nie an einen anderen Host). Antworten über 64 MB sind ein Fehler. `--by` ist bei `suche` und `aufloesen` ohne Angabe `RECHERCHE_BY`, sonst `claude-code/recherche`; `eintrag` verlangt es.
 `suche`, `eintrag`, `zusammenfuehren`, `aufloesen`, `fundweg`, `retraktion`, `abstract`, `volltext`, `anker`, `pruefen`,
-`archivieren`, `dienste`; Hilfe mit `api.py <befehl> --help`. Dienste für `suche`: `pubmed`, `europepmc`, `crossref`,
-`openalex`, `semanticscholar`, `arxiv` und `cellar` (EU-Recht, SPARQL). Protokollzeile je Abruf:
-`{v, lauf, weg, db, werkzeug, query, parameter, at, by, n_gesamt, n_geliefert, url, fehler, treffer: [{rang, doi, pmid, pmcid, arxiv, celex, titel, jahr, quelle}]}`,
-je Dienst kommen Felder dazu (`epmc`, `oa`, `typ`, `openalex`, `s2`, `url`).
+`archivieren`, `dip-person`, `dip-dokument`, `dienste`; Hilfe mit `api.py <befehl> --help`. Dienste für `suche`: `pubmed`, `europepmc`, `crossref`,
+`openalex`, `semanticscholar`, `arxiv`, `cellar` (EU-Recht, SPARQL) und `dip` (Bundestag). Protokollzeile je Abruf:
+`{v, lauf, weg, db, werkzeug, query, parameter, at, by, n_gesamt, n_geliefert, url, fehler, treffer: [{rang, doi, pmid, pmcid, arxiv, celex, dip, titel, jahr, quelle}]}`,
+je Dienst kommen Felder dazu (`epmc`, `oa`, `typ`, `openalex`, `s2`, `url`; bei `dip` `datum`, `fundstelle`, `xml`, `dokument`, `top`, `person_id`, `wahlperiode`, `vorgaenge`, `beschluss`).
 In einer Bash-Sandbox je Aufruf `allowed_domains` mit dem Host des Dienstes angeben.

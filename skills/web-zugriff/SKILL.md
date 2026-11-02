@@ -15,7 +15,7 @@ Abrufe von Webseiten sind dann nicht möglich und werden als offen gemeldet.
 
 Strukturierte Schnittstellen wissenschaftlicher und behördlicher Anbieter, z. B. Crossref,
 NCBI E-Utilities (PubMed, PMC, MeSH), Europe PMC REST, arXiv-API, Semantic Scholar, OpenAlex,
-Unpaywall, ClinicalTrials.gov-API, EU-Amt für Veröffentlichungen (Cellar/SPARQL), GitHub-API,
+Unpaywall, ClinicalTrials.gov-API, EU-Amt für Veröffentlichungen (Cellar/SPARQL), DIP-API des Bundestags, GitHub-API,
 ToolUniverse-MCP. Auch Volltexte, die eine solche API liefert (z. B. Europe PMC `fullTextXML`).
 
 Websuche (`WebSearch`) liefert nur Trefferlisten und ist kein Seitenabruf.

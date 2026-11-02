@@ -18,7 +18,7 @@ import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -78,6 +78,267 @@ class Grundtest(unittest.TestCase):
             rc = api.cmd_suche(a)
         zeilen = [json.loads(z) for z in (self.lauf / "api.jsonl").read_text(encoding="utf-8").splitlines()]
         return rc, zeilen[-1], ausgabe.getvalue()
+
+
+REDE = {"id": "1", "aktivitaetsart": "Rede", "typ": "Aktivität", "dokumentart": "Plenarprotokoll", "wahlperiode": 21,
+        "datum": "2026-10-15", "titel": "Erika Beispiel, MdB, Fraktion", "person_id": "99",
+        "fundstelle": {"id": "7", "dokumentart": "Plenarprotokoll", "herausgeber": "BT", "dokumentnummer": "21/34",
+                       "seite": "3456B", "pdf_url": "https://dserver.bundestag.de/btp/21/21034.pdf#P.3456",
+                       "xml_url": "https://dserver.bundestag.de/btp/21/21034.xml"},
+        "vorgangsbezug": [{"id": "5", "titel": "Haushalt", "vorgangstyp": "Gesetzgebung", "vorgangsposition": "1. Beratung"}]}
+DIP_KEY = "dip-geheim-4711"
+
+
+class Dip(Grundtest):
+    def setUp(self):
+        super().setUp()
+        api._aus_schluesselbund.clear()
+        u = umgebung(DIP_API_KEY=DIP_KEY)
+        u.start()
+        self.addCleanup(u.stop)
+
+    def namespace(self, **k):
+        return argparse.Namespace(lauf=str(self.lauf), by="process:test", **k)
+
+    def protokoll(self, lauf=None):
+        return [json.loads(z) for z in ((lauf or self.lauf) / "api.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    def test_schluessel_nur_im_kopf(self):
+        with mock.patch.object(api._OPENER, "open", return_value=Antwort(json.dumps(
+                {"numFound": 1, "cursor": "a", "documents": [REDE]}).encode())) as o:
+            rc, e, ausgabe = self.suche("dip", "aktivitaet?f.person_id=99")
+        anfrage = o.call_args[0][0]
+        self.assertEqual(rc, 0)
+        self.assertEqual(anfrage.get_header("Authorization"), f"ApiKey {DIP_KEY}")
+        self.assertNotIn(DIP_KEY, anfrage.full_url)
+        self.assertNotIn(DIP_KEY, json.dumps(e) + ausgabe)
+        self.assertEqual(e["query"], "aktivitaet?f.person_id=99")
+        self.assertEqual(e["db"], "api:dip")
+
+    def test_schluesselbund_haelt_den_aufruf_nicht_an(self):
+        """Gefunden in der Prüfung zu 0.7.1: Ohne Zeitlimit wartete der Aufruf endlos auf eine Freigabe im Schlüsselbund."""
+        with mock.patch.dict(api.os.environ), mock.patch.object(api.shutil, "which", return_value="/bin/x"), \
+                mock.patch.object(api.subprocess, "run", side_effect=api.subprocess.TimeoutExpired("x", 60)) as lauf:
+            api.os.environ.pop("DIP_API_KEY")
+            rc, e, _ = self.suche("dip", "aktivitaet?f.person_id=99")
+        self.assertEqual(rc, 2)
+        self.assertIn("timed out", e["fehler"])
+        self.assertEqual(lauf.call_args.kwargs["timeout"], 60)
+
+    def fremdes_ziel(self) -> Path:
+        self.lauf.mkdir()
+        fremd = Path(self._tmp.name) / "fremd"
+        fremd.mkdir()
+        return fremd
+
+    def test_text_nicht_durch_symlink_im_lauf(self):
+        """Gefunden in der Prüfung zu 0.7.1: `LAUF/text` als Link aus einem fremden Wiki lenkte den Text hinaus."""
+        fremd = self.fremdes_ziel()
+        (self.lauf / "text").symlink_to(fremd)
+        a = self.namespace(art="plenarprotokoll", kennung="21/34", out=str(self.lauf / "text" / "a.txt"))
+        antwort = {"numFound": 1, "documents": [{"id": "1", "titel": "T", "text": "Wortlaut"}]}
+        with mock.patch.object(api, "hole_dip", return_value=antwort), self.assertRaisesRegex(SystemExit, "symbolischer Link"):
+            api.cmd_dip_dokument(a)
+        self.assertEqual(list(fremd.iterdir()), [])
+
+    def test_nachschlagen_nicht_durch_symlink(self):
+        fremd = self.fremdes_ziel()
+        (self.lauf / "nachschlagen").symlink_to(fremd)
+        a = self.namespace(person_id=None, name="Beispiel Erika", von=None, bis=None, art=None, filter=[], max=5)
+        with mock.patch.object(api, "hole_dip") as h, self.assertRaisesRegex(SystemExit, "symbolischer Link"):
+            api.cmd_dip_person(a)
+        h.assert_not_called()
+        self.assertEqual(list(fremd.iterdir()), [])
+
+    def test_archiv_folgt_keinem_symlink_als_nachschlagen(self):
+        fremd = self.fremdes_ziel()
+        (fremd / "fremd.json").write_text("{}", encoding="utf-8")
+        (self.lauf / "nachschlagen").symlink_to(fremd)
+        ablage = Path(self._tmp.name) / "ablage"
+        with mock.patch.object(api, "protokoll_ziel", return_value=ablage), redirect_stdout(io.StringIO()):
+            api.cmd_archivieren(argparse.Namespace(lauf=str(self.lauf)))
+        self.assertEqual(list(ablage.rglob("*.json")), [])
+
+    def test_treffer_fehlt_trotz_gemeldeter_person(self):
+        a = self.namespace(person_id=None, name="Beispiel Erika", von=None, bis=None, art=None, filter=[], max=5)
+        with mock.patch.object(api, "hole_dip", return_value={"numFound": 1, "documents": []}), \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(api.cmd_dip_person(a), 1)
+
+    def test_treffer_mit_fundstelle(self):
+        with mock.patch.object(api, "hole_dip", return_value={"numFound": 1, "cursor": "a", "documents": [REDE]}):
+            _, e, _ = self.suche("dip", "aktivitaet?f.person_id=99")
+        t = e["treffer"][0]
+        self.assertEqual((t["dip"], t["typ"], t["datum"], t["jahr"]), ("aktivitaet/1", "Rede", "2026-10-15", 2026))
+        self.assertEqual(t["fundstelle"], "BT-Plenarprotokoll 21/34, S. 3456B")
+        self.assertEqual(t["quelle"], "Deutscher Bundestag/Bundesrat – DIP")
+        self.assertEqual(t["url"], REDE["fundstelle"]["pdf_url"])
+        self.assertEqual(t["xml"], REDE["fundstelle"]["xml_url"])
+
+    def test_folgeseiten_bis_der_cursor_steht(self):
+        folge = [{"numFound": 4, "cursor": "a", "documents": [REDE, REDE]},
+                 {"numFound": 4, "cursor": "b", "documents": [REDE]}, {"numFound": 4, "cursor": "b", "documents": []}]
+        with mock.patch.object(api, "hole_dip", side_effect=folge) as h:
+            _, e, _ = self.suche("dip", "aktivitaet?f.person_id=99")
+        self.assertEqual(e["n_geliefert"], 3)
+        self.assertEqual(h.call_count, 3)
+        self.assertNotIn("cursor", abfrage(h.call_args_list[0][0][0]))
+        self.assertEqual(abfrage(h.call_args_list[1][0][0])["cursor"], "a")
+        self.assertEqual(e["url"], h.call_args_list[0][0][0])
+
+    def test_nur_filter_und_listen(self):
+        for q in ("aktivitaet?apikey=x", "aktivitaet?cursor=x", "aktivitaet?format=xml", "plenarprotokoll-text",
+                  "../person", "person/1", "aktivitaet?f.person"):
+            with mock.patch.object(api, "hole_dip") as h:
+                rc, e, _ = self.suche("dip", q)
+            self.assertEqual(rc, 2, q)
+            self.assertIn("ValueError", e["fehler"], q)
+            h.assert_not_called()
+        self.assertNotIn("x&", self.protokoll()[0]["query"])
+        self.assertIn("***", self.protokoll()[0]["query"])
+
+    def test_ohne_schluessel_fehler_im_protokoll(self):
+        with umgebung(), mock.patch.object(api.subprocess, "run", return_value=mock.Mock(returncode=44, stdout="")), \
+                mock.patch.object(api._OPENER, "open") as o:
+            rc, e, _ = self.suche("dip", "person?f.person=Beispiel")
+        self.assertEqual(rc, 2)
+        self.assertIn("DIP-API-Key fehlt", e["fehler"])
+        o.assert_not_called()
+
+    def test_schluesselbund_wird_geschwaerzt(self):
+        wert = "bund-geheim-0815"
+        def antwort(*_a, **_k):
+            raise urllib.error.HTTPError("https://search.dip.bundestag.de/", 400, "x", {}, io.BytesIO(f"kaputt {wert}".encode()))
+        with umgebung(), mock.patch.object(api.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=wert + "\n")), \
+                mock.patch.object(api.shutil, "which", return_value="/usr/bin/security"), \
+                mock.patch.object(api._OPENER, "open", side_effect=antwort) as o:
+            _, e, ausgabe = self.suche("dip", "person?f.person=Beispiel")
+        self.assertEqual(o.call_args[0][0].get_header("Authorization"), f"ApiKey {wert}")
+        self.assertNotIn(wert, json.dumps(e) + ausgabe)
+        self.assertIn("***", e["fehler"])
+
+    def test_schluessel_geht_nicht_an_andere_hosts(self):
+        self.assertIn("authorization", [t for t in api.KOPF_NUR_SELBER_HOST])
+        with self.assertRaises(api.Abgelehnt):
+            api.pruefe_host("https://search.dip.bundestag.de.evil.example/api/v1/person")
+
+    def test_person_und_zeitraum_mit_artfilter(self):
+        antrag = {**REDE, "id": "2", "aktivitaetsart": "Antrag"}
+        a = self.namespace(person_id=99, name=None, von="2026-10-01", bis="2026-10-31", art="Rede", filter=["f.zuordnung=BT"], max=20)
+        with mock.patch.object(api, "hole_dip", return_value={"numFound": 2, "cursor": "a", "documents": [antrag, REDE]}) as h, \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(api.cmd_dip_person(a), 0)
+        e = self.protokoll()[-1]
+        self.assertEqual(abfrage(h.call_args[0][0]), {"f.person_id": "99", "f.datum.start": "2026-10-01",
+                                                      "f.datum.end": "2026-10-31", "f.zuordnung": "BT", "format": "json"})
+        self.assertEqual(e["query"], "aktivitaet?f.person_id=99&f.datum.start=2026-10-01&f.datum.end=2026-10-31&f.zuordnung=BT")
+        self.assertEqual([t["dip"] for t in e["treffer"]], ["aktivitaet/1"])
+        self.assertEqual((e["n_gesamt"], e["n_geliefert"]), (2, 1))
+        self.assertEqual(e["parameter"]["art_hier_gefiltert"], "Rede")
+        self.assertEqual(e["parameter"]["n_gesichtet"], 2)
+
+    def test_name_muss_genau_eine_person_treffen(self):
+        person = {"id": "99", "titel": "Erika Beispiel, MdB", "typ": "Person", "wahlperiode": [20, 21], "datum": "2026-10-15"}
+        a = self.namespace(person_id=None, name="Beispiel", von=None, bis=None, art=None, filter=[], max=20)
+        with mock.patch.object(api, "hole_dip", return_value={"numFound": 2, "cursor": "a", "documents": [person, person]}) as h, \
+                redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(api.cmd_dip_person(a), 1)
+        h.assert_called_once()
+        self.assertFalse((self.lauf / "api.jsonl").exists())
+        self.assertEqual(self.protokoll(self.lauf / "nachschlagen")[0]["n_gesamt"], 2)
+        folge = [{"numFound": 1, "cursor": "a", "documents": [person]}, {"numFound": 1, "cursor": "a", "documents": [REDE]}]
+        with mock.patch.object(api, "hole_dip", side_effect=folge), redirect_stdout(io.StringIO()):
+            self.assertEqual(api.cmd_dip_person(a), 0)
+        self.assertEqual(self.protokoll()[-1]["query"], "aktivitaet?f.person_id=99")
+
+    def test_reden_einer_person_bleiben_getrennte_kandidaten(self):
+        zweite = {**REDE, "id": "2", "fundstelle": {**REDE["fundstelle"], "seite": "3470A"}}
+        with mock.patch.object(api, "hole_dip", return_value={"numFound": 2, "cursor": "a", "documents": [REDE, zweite]}):
+            self.suche("dip", "aktivitaet?f.person_id=99")
+        kandidaten, fehler = api.zusammenfuehren(self.lauf)
+        self.assertEqual(fehler, [])
+        self.assertEqual([k["dip"] for k in kandidaten], ["aktivitaet/1", "aktivitaet/2"])
+        self.assertEqual(kandidaten[1]["fundstelle"], "BT-Plenarprotokoll 21/34, S. 3470A")
+
+    def dokument(self, kennung, antwort, art="plenarprotokoll"):
+        ziel = self.lauf.parent / "text.txt"
+        a = self.namespace(art=art, kennung=kennung, out=str(ziel))
+        with mock.patch.object(api, "hole_dip", return_value=antwort) as h, redirect_stdout(io.StringIO()):
+            rc = api.cmd_dip_dokument(a)
+        return rc, h, ziel, self.protokoll()[-1]
+
+    def test_dokument_ueber_id(self):
+        d = {**REDE, "id": "7", "titel": "Protokoll", "fundstelle": {k: v for k, v in REDE["fundstelle"].items() if k != "seite"},
+             "pdf_hash": "abc", "text": "Wortlaut  bleibt\nunverändert"}
+        rc, h, ziel, e = self.dokument("7", d)
+        self.assertEqual(rc, 0)
+        self.assertTrue(h.call_args[0][0].endswith("/plenarprotokoll-text/7?format=json"))
+        self.assertIn("Wortlaut  bleibt\nunverändert", ziel.read_text(encoding="utf-8"))
+        self.assertNotIn("Wortlaut", json.dumps(e))
+        self.assertEqual(e["treffer"][0]["dip"], "plenarprotokoll/7")
+        self.assertEqual(e["parameter"]["zeichen"], 28)
+        self.assertEqual(len(e["parameter"]["sha256_text"]), 64)
+
+    def test_dokumentnummer_muss_eindeutig_sein(self):
+        d = {**REDE, "id": "7", "text": "x"}
+        rc, h, ziel, e = self.dokument("21/34", {"numFound": 2, "cursor": "a", "documents": [d, {**d, "id": "8"}]}, art="drucksache")
+        self.assertEqual(rc, 2)
+        self.assertEqual(abfrage(h.call_args[0][0])["f.dokumentnummer"], "21/34")
+        self.assertIn("/drucksache-text?", h.call_args[0][0])
+        self.assertFalse(ziel.exists())
+        self.assertEqual(len(e["treffer"]), 2)
+
+    def test_dokument_ohne_text_ist_fehler(self):
+        rc, _, ziel, e = self.dokument("7", {**REDE, "id": "7"})
+        self.assertEqual(rc, 2)
+        self.assertIn("keinen Volltext", e["fehler"])
+        self.assertFalse(ziel.exists())
+
+    def test_vorlaeufiger_text_wird_benannt(self):
+        d = {**REDE, "id": "7", "text": f"Rede\n{api.DIP_VORLAEUFIG} der Sitzung wird später veröffentlicht.\n"}
+        with mock.patch("sys.stderr", io.StringIO()) as fehler:
+            rc, _, ziel, e = self.dokument("7", d)
+        self.assertEqual(rc, 0)
+        self.assertTrue(e["parameter"]["vorlaeufig"])
+        self.assertIn("ACHTUNG", ziel.read_text(encoding="utf-8"))
+        self.assertIn("vorläufig", fehler.getvalue())
+        _, _, ziel, e = self.dokument("7", {**REDE, "id": "7", "text": "Rede"})
+        self.assertNotIn("vorlaeufig", e["parameter"])
+        self.assertNotIn("ACHTUNG", ziel.read_text(encoding="utf-8"))
+
+    def test_geholter_text_ist_kein_kandidat(self):
+        with mock.patch.object(api, "hole_dip", return_value={"numFound": 1, "cursor": "a", "documents": [REDE]}):
+            self.suche("dip", "aktivitaet?f.person_id=99")
+        self.dokument("7", {**REDE, "id": "7", "text": "Wortlaut"})
+        self.assertEqual([k["dip"] for k in api.zusammenfuehren(self.lauf)[0]], ["aktivitaet/1"])
+
+    def test_archiv_enthaelt_nachschlagen(self):
+        person = {"id": "99", "titel": "Erika Beispiel, MdB", "typ": "Person"}
+        a = self.namespace(person_id=None, name="Beispiel", von=None, bis=None, art=None, filter=[], max=20)
+        with mock.patch.object(api, "hole_dip", return_value={"numFound": 1, "cursor": "a", "documents": [person]}), \
+                redirect_stdout(io.StringIO()):
+            api.cmd_dip_person(a)
+        ziel = self.lauf.parent / "archiv"
+        with mock.patch.object(api, "protokoll_ziel", return_value=ziel), redirect_stdout(io.StringIO()):
+            api.cmd_archivieren(argparse.Namespace(lauf=str(self.lauf)))
+        self.assertTrue((ziel / "api.jsonl").is_file())
+        self.assertTrue((ziel / "nachschlagen" / "api.jsonl").is_file())
+
+    def test_systemwurzeln_schwaechen_die_pruefung_nicht(self):
+        with mock.patch.object(api.sys, "platform", "darwin"), mock.patch.object(api.shutil, "which", return_value="/usr/bin/security"), \
+                mock.patch.object(api.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="kein Zertifikat")):
+            k = api.tls_kontext()
+        self.assertEqual(k.verify_mode, api.ssl.CERT_REQUIRED)
+        self.assertTrue(k.check_hostname)
+        with mock.patch.object(api.sys, "platform", "darwin"), mock.patch.object(api.shutil, "which", return_value="/usr/bin/security"), \
+                mock.patch.object(api.subprocess, "run", side_effect=OSError("kein security")):
+            self.assertEqual(api.tls_kontext().verify_mode, api.ssl.CERT_REQUIRED)
+
+    def test_dokument_kennung_wird_geprueft(self):
+        a = self.namespace(art="drucksache", kennung="../person/1", out=str(self.lauf.parent / "t.txt"))
+        with self.assertRaises(SystemExit), mock.patch.object(api, "hole_dip") as h:
+            api.cmd_dip_dokument(a)
+        h.assert_not_called()
 
 
 class Wiederholung(Grundtest):

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 SKILL_DIR = Path(__file__).resolve().parent.parent
 RESERVED = {"index.md", "log.md"}
 STATUS = ("draft", "stable", "deprecated")
