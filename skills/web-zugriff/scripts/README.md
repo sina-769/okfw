@@ -27,7 +27,7 @@ Host: web-recherche ──stdin: Token──▶ Agent-Container ──HTTPS_PROX
 | `container/proxy.mjs` | HTTPS-Proxy mit Domain-Freigabe (Netz-Sperre) |
 | `container/pdf-text.mjs` | PDF-Abruf und Textgewinnung für `--pdf`, ohne Modell und ohne Token |
 | `tests/test_pruefung.py` | Offline-Tests der Host-Prüfung |
-| `tests/container_tests.py` | Vorprüfung (Test 0), Live-Tests des Agenten (Abruf, `ls`, `/etc/passwd`, Schreiben außerhalb) und des PDF-Wegs (Tests 5–7), Protokoll in `tests/protokoll-<Datum>.md` |
+| `tests/container_tests.py` | Vorprüfung (Test 0), Live-Tests des Agenten (Abruf, `ls`, `/etc/passwd`, Schreiben außerhalb) und des PDF-Wegs (Tests 5–7), Protokoll in `~/.claude/web-zugriff-protokoll/container-tests-<Datum>.md` |
 
 ## Schutzschichten
 
@@ -130,8 +130,8 @@ steht gegebenenfalls im Text.
 
 ## Tests (Stand 2026-11-01)
 
-Protokolle: `tests/protokoll-2026-10-25.md` (Tests 0–4, davon Test 1 auf `example.org`) und
-`tests/protokoll-2026-11-01.md` (Tests 0, 2–7 mit dem aktuellen Image). Test 1 und Test 7 rufen als einzige etwas
+Protokolle am okfw-Release 0.6.0: Lauf vom 2026-10-25 (Tests 0–4, davon Test 1 auf `example.org`) und
+vom 2026-11-01 (Tests 0, 2–7 mit dem aktuellen Image). Test 1 und Test 7 rufen als einzige etwas
 ab und brauchen deshalb je eine Freigabe. Test 1 lief am 2026-11-01 nicht, weil dafür keine Freigabe vorlag; der
 Weg des Agenten hat sich seitdem nur beim gemeinsamen Containerstart und um einen Satz im Systemprompt geändert,
 Tests 2–4 decken das ab. Die Tests 2–4 und 6 geben nur `example.invalid` frei; diese Domain löst nie auf.

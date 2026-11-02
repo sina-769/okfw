@@ -1,8 +1,8 @@
 # Selbstreview
 
 Ein Wegwerf-Wiki über okfw selbst, mit okfw gebaut, macht sichtbar, wo Doku, Code und Tests auseinanderlaufen.
-Es bleibt unter `.nachbau/` (git-ignoriert); ins Repo kommt nur der Bericht
-`tests/selbstreview-<datum>-<version>.md`. Vorbild ist ein okfw-Wiki über ein fremdes Projekt, dessen
+Es bleibt unter `.nachbau/` (git-ignoriert); heraus kommt nur der Bericht
+als Anhang am Release. Vorbild ist ein okfw-Wiki über ein fremdes Projekt, dessen
 Konzeptkarten Widersprüche als `> ⚠️ **Widerspruch:**` mit beiden Fundstellen führen und eine Synthese
 „Wo Doku und Code auseinanderlaufen“ bündelt.
 
@@ -68,7 +68,7 @@ vermerken. Nie `--by human:…`: Das Wiki wird weggeworfen, freigegeben wird es 
 ## 4. Bericht
 
 Synthese `syntheses/doku-und-code.md` im Wiki (Frage, Kerninsichten mit Tabelle der Widersprüche, Begriffe,
-Lücken, Verwandte Seiten). Eine Kopie für das Repo als `tests/selbstreview-<datum>-<version>.md`, ohne
+Lücken, Verwandte Seiten). Eine Kopie als Anhang am Release, ohne
 Wiki-Links und Fußnoten, mit Datum, Commit, Zahl der Karten, Widersprüchen und Lücken, Modell und Anbieter je
 Arbeitsschritt und was daraus wurde (behoben mit Commit, offen im Backlog).
 

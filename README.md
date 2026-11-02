@@ -217,13 +217,13 @@ jeder Version:
    nachgestellter Datenverlust oder Bruch der festen Schnittstelle. Alles andere geht in die nächste Version.
    Höchstens zwei Korrekturrunden; jede prüft nur ihren eigenen Diff, kein weiteres
    Modell liest denselben Stand. Bleibt danach ein Befund der ersten Art, entscheidet die Person, ob das Release
-   wartet. Bericht nach `tests/review-<datum>-<version>.md`: behoben, verworfen mit Grund, zurückgestellt, nicht geprüft.
+   wartet. Bericht als Anhang am Release: behoben, verworfen mit Grund, zurückgestellt, nicht geprüft.
 4. **Screenshots:** Die Bilder in `docs/` entstehen neu, nur vor einem Release. Die Aufnahme läuft in einem Container ohne
    Netz, der nur das Plugin und ein Beispiel-Wiki aus öffentlichen Quellen sieht. Vor jedem Bild wird der Seitentext auf
    private Pfade und Namen geprüft, danach der Text im Bild per OCR; ein Treffer bricht den Lauf ab. Die Bilder tragen
    keine Metadaten, und eine Person sieht jedes an, bevor es veröffentlicht wird.
-5. **Nachbau:** frische Installation im Container ([Nachbau-Test](#nachbau-test)), Protokoll nach
-   `tests/protokoll-<datum>-<version>.md`.
+5. **Nachbau:** frische Installation im Container ([Nachbau-Test](#nachbau-test)), Protokoll als
+   Anhang am Release.
 6. **Export:** Version in `.claude-plugin/plugin.json` und `.claude-plugin/marketplace.json` setzen, `CHANGELOG.md`
    abschließen. Eine feste Prüfung auf genau diesen Stand samt Commit-Nachricht hinterlegt bei Grün einen Vermerk; ohne
    ihn bricht der Export ab. Eine ausgefallene Prüfung gilt als nicht geprüft, nie als grün. Dann die Version
@@ -231,7 +231,7 @@ jeder Version:
 
 Eine volle Prüfung des ganzen Kerns samt [Selbstreview](tests/selbstreview.md) ist eine eigene Aufgabe, kein
 Release-Schritt. Anlass sind ein neuer Angreifer oder Eingabeweg, ein Umbau des Kerns oder ein Befund, der eine neue
-Art von Angriff zeigt. Letzte: [tests/review-2026-11-01-0.6.0.md](tests/review-2026-11-01-0.6.0.md).
+Art von Angriff zeigt. Letzte: 0.6.0, der Bericht hängt am Release.
 
 ## Tests
 
@@ -264,8 +264,7 @@ Mit `-e CLAUDE_CODE_OAUTH_TOKEN` (Token aus `claude setup-token`) läuft zusätz
 Claude-Sitzung, die an den Schreibschutz stößt. Für einen Release gehört sie dazu: Ohne Token steht der Schritt als übersprungen
 im Protokoll, und das Protokoll trägt den Vermerk „Unvollständig“.
 
-Letztes Protokoll: [tests/protokoll-2026-11-01-0.6.0.md](tests/protokoll-2026-11-01-0.6.0.md) (okfw 0.6.0,
-46 von 46 mit `claude -p`); ältere liegen daneben.
+Letztes Protokoll: okfw 0.6.0, 46 von 46 mit `claude -p`. Die Protokolle hängen an den Releases.
 
 ## Lizenz und Dank
 

@@ -1,6 +1,6 @@
 ---
 name: recherche
-description: Findet Literatur und legt Quellenkarten in einem Wiki im OKF-Format an (/recherche <frage> oder /recherche <doi|pmid|arxiv>). Mit Frage ein reproduzierbarer Suchplan über offizielle Literatur-APIs, optional ToolUniverse und Websuche im Container, Protokoll je Abruf, dedupliziert, Kandidaten mit Fundweg. Mit Kennung oder nach der Auswahl die Aufnahme: Dublette, Rückzug, Karte, Fundweg, Lizenz, Nutzungsrechte. Nutzen, wenn neue Literatur gesucht oder eine bekannte Quelle aufgenommen werden soll, auch in /goal-Läufen.
+description: Findet Literatur und legt Quellenkarten in einem Wiki im OKF-Format an (/recherche <frage> oder /recherche <doi|pmid|arxiv>). Mit Frage ein reproduzierbarer Suchplan über offizielle Literatur-APIs, optional ToolUniverse und Websuche im Container, Protokoll je Abruf, dedupliziert, Kandidaten mit Fundweg. Mit Kennung oder nach der Auswahl die Aufnahme: Dublette, Rückzug, Karte, Fundweg, Lizenz, Nutzungsrechte. Nutzen, wenn neue Literatur gesucht oder eine bekannte Quelle aufgenommen werden soll, auch in /goal-Läufen. okfw ist ein allgemeines Werkzeug, um Wissen aus Quellen zu sammeln, zu belegen und zu prüfen, und nicht dazu bestimmt, Empfehlungen für einzelne Personen zu geben; die Zweckbestimmung steht im README des Plugins.
 argument-hint: <frage> | <doi|pmid|arxiv> [--web <domains>] [--max N] [--lauf DIR --kandidat N] [--art person|material|modellvorschlag|zitatverfolgung --von <slug>] [--slug <slug>]
 ---
 

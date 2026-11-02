@@ -16,7 +16,7 @@
 7. PDF-Abruf vom freigegebenen Testdokument, kein Token nötig.
 Die Tests 2–4 und 6 geben nur example.invalid frei: die Domain löst nie auf (RFC 6761), es wird nichts
 abgerufen. Ausgewertet wird nur Struktur (Werkzeugaufrufe, Netz-Log, Dateien); Webinhalt landet nicht
-im Protokoll. Protokoll: tests/protokoll-<Datum>.md neben diesem Skript.
+im Protokoll. Protokoll: ~/.claude/web-zugriff-protokoll/container-tests-<Datum>.md, nicht im Testordner.
 """
 import argparse
 import base64
@@ -589,7 +589,8 @@ def main():
             + (f" · Tests 2–4 mit `{NICHTS}` (löst nie auf, kein Abruf)" if {2, 3, 4} & set(nummern) else ""),
             "- Ausgewertet wurden nur Struktur (Werkzeugaufrufe, Netz-Log des Proxys, Dateien), kein Webinhalt.",
             ""]
-    protokoll = HIER / f"protokoll-{zeit:%Y-%m-%d}.md"
+    protokoll = PROTOKOLL_JSONL.parent / f"container-tests-{zeit:%Y-%m-%d}.md"
+    protokoll.parent.mkdir(parents=True, exist_ok=True)
     with protokoll.open("a", encoding="utf-8") as fh:
         fh.write(("\n".join(kopf) + "\n" + "\n".join(abschnitte) + "\n").replace(str(arbeits), "<arbeitsordner>"))
     shutil.rmtree(arbeits, ignore_errors=True)

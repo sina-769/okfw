@@ -7,14 +7,14 @@
   },
   "metadata": {
     "description": "okfw: Wissens-Wikis im Open Knowledge Format v0.2 für Claude Code",
-    "version": "0.6.0"
+    "version": "0.6.1"
   },
   "plugins": [
     {
       "name": "okfw",
       "source": "./",
       "description": "Wissens-Wikis im Open Knowledge Format v0.2 nach dem pi-llm-wiki-Muster, mit Belegpflicht, Lint, Hooks und HTML-Dashboard, dazu Literaturrecherche, Lesen von Quellen, Gegenprüfung, Webabruf im Container und Modellrollen. Braucht uv; der Webabruf braucht eine Docker-Laufzeit.",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "category": "productivity"
     }
   ]

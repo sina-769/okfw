@@ -481,6 +481,8 @@ Arbeitshilfe, keine Rechtsberatung; im Zweifel gilt `fragen`.
 `rights: {abbildung: "ja: Abdruckgenehmigung des Verlags vom 2026-10-20"}`; den Beleg dafür als
 Quelle erfassen).
 
+Wer eine Rohquelle allein auf § 44b UrhG stützt, muss die Kopie löschen, sobald sie für das Text und Data Mining nicht mehr erforderlich ist (Abs. 2 S. 2); okfw legt Rohquellen dauerhaft ab und löscht sie nicht von selbst.
+
 Lizenzen finden: `lizenz <seite> --fetch` fragt Crossref (bevorzugt die Lizenz der Verlagsfassung), für
 DOIs, die Crossref nicht kennt, DataCite, dann Europe PMC und OpenAlex (je Fundort, Verlagsfassung zuerst);
 ohne DOI, PMID oder PMCID bleibt nur das Original (Lizenzhinweis im PDF, Impressum, Kopf einer Datei),

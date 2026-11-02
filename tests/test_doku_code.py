@@ -104,7 +104,7 @@ class ProfilDokumentation(WikiTest):
 
 
 class SelbstreviewNullDreiNull(WikiTest):
-    """Befunde aus dem Selbstreview 0.3.0 (tests/selbstreview-2026-10-29-0.3.0.md), im Code behoben."""
+    """Befunde aus dem Selbstreview 0.3.0, im Code behoben."""
 
     def toml_dazu(self, text: str) -> None:
         toml = self.root / "wiki.toml"

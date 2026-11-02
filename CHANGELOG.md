@@ -1,10 +1,23 @@
 # Änderungen
 
+Je Version steht hier nur das Ergebnis der Prüfungen. Protokolle und Berichte hängen als Anhang am Release, die aus der Zeit vor 0.6.0 gesammelt an 0.6.0.
+
+## 0.6.1 · 2.11.2026
+
+Aufräumen, Kern, Hooks und Profile bleiben wie in 0.6.0.
+
+Geprüft: alle Testsuiten und die Prüfungen vor dem Export; kein neuer Nachbau, weil Kern, Hooks und Profile unverändert sind. Die Container-Tests liefen für diese Änderung nicht erneut.
+
+- **Berichte am Release statt im Repo:** Nachbau-Protokolle, Reviews und Selbstreviews liegen nicht mehr unter `tests/`, sondern als Anhang am Release 0.6.0. README und CHANGELOG verweisen entsprechend. Die Container-Tests von `web-zugriff` schreiben ihr Protokoll nach `~/.claude/web-zugriff-protokoll/`, nicht mehr neben das Skript.
+- **Drei Hinweise ergänzt:** Die Beschreibungen von `okfw` und `recherche` nennen, wofür sie nicht gedacht sind; `konfiguration.md` sagt, dass eine allein auf § 44b UrhG gestützte Rohquelle zu löschen ist, wenn sie für das Text und Data Mining nicht mehr erforderlich ist.
+
 ## 0.6.0 · 1.11.2026
 
 Ein Plugin, Bearbeiten im Dashboard, Modellrollen, Schaubilder, Design.
 
 0.5.0 wurde nie veröffentlicht; sein Inhalt steht unten und kommt mit dieser Version.
+
+Geprüft: Nachbau 46 von 46 mit echter Claude-Sitzung, volle Prüfung des Kerns, Selbstreviews über 0.5.0 und 0.6.0.
 
 Das README nennt die Zweckbestimmung: okfw ist ein allgemeines Werkzeug und kein Medizinprodukt.
 
@@ -299,8 +312,7 @@ Behoben:
 
 ## 0.4.0 · 29.10.2026
 
-Erster Selbstreview über 0.3.0: Doku, Code und Tests gegeneinander gelesen
-([Bericht](tests/selbstreview-2026-10-29-0.3.0.md)).
+Erster Selbstreview über 0.3.0: Doku, Code und Tests gegeneinander gelesen.
 
 Neu:
 
@@ -312,8 +324,7 @@ Neu:
 - **GitHub-Workflow** `.github/workflows/tests.yml`: Tests bei jedem Pull Request und auf `main`.
 - Tests für jede Lint-Regel und jeden `wiki.toml`-Schlüssel, die bisher keiner berührte.
 - Nachbau-Test 34 von 34 mit echter Claude-Sitzung: `claude -p` scheitert beim Überschreiben einer Rohquelle
-  am Guard und schlägt `capture` oder eine `-v2`-Fassung vor
-  ([tests/protokoll-2026-10-29-0.4.0.md](tests/protokoll-2026-10-29-0.4.0.md)).
+  am Guard und schlägt `capture` oder eine `-v2`-Fassung vor.
 
 Behoben:
 
@@ -372,8 +383,7 @@ Neu:
 - Abschnitt „Freigabe über Claude“ in `skills/okfw/docs/konfiguration.md` mit Ablauf einer Charge und
   Einrichtung der Commit-Signatur.
 - Nachbau-Test mit zwei Schritten zur Freigabe (Ablehnung ohne Gegenprüfung, Rückfall nach `body`):
-  33 von 33 Pflichtschritten bestanden, der Schritt mit `claude -p` ohne Token übersprungen
-  ([tests/protokoll-2026-10-28-0.3.0.md](tests/protokoll-2026-10-28-0.3.0.md)).
+  33 von 33 Pflichtschritten bestanden, der Schritt mit `claude -p` ohne Token übersprungen.
 
 Migration: Ältere Vermerke ohne Prüfwert bleiben gültig, solange `generated.at` nicht jünger ist, zählen
 aber nicht als Gegenprüfung für eine Freigabe; Lint `verified_unhashed` und „Gegenprüfung ohne Prüfwert“
@@ -415,8 +425,10 @@ Neu:
 - Das öffentliche Dashboard zeigt keine Ablageorte von Volltexten (`stored`) mehr; der Schreibschutz
   deckt auch das öffentliche Dashboard ab.
 - Python-Tests unter `tests/` (`uv run python -m unittest`); Nachbau-Test 32 von 32 mit echter
-  Claude-Sitzung ([tests/protokoll-2026-10-28.md](tests/protokoll-2026-10-28.md)).
+  Claude-Sitzung.
 
 ## 0.1.0 · 25.10.2026
 
 Erste Veröffentlichung.
+
+Geprüft: Nachbau 31 von 31 Pflichtschritten, die echte Claude-Sitzung übersprungen.

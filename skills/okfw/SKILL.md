@@ -1,6 +1,6 @@
 ---
 name: okfw
-description: Das eine gemeinsame Werkzeug für alle Wissens-Wikis im Open Knowledge Format v0.2 nach dem pi-llm-wiki-Muster (jedes Projekt mit wiki.toml und jedes neue Wiki) – Recall, Quellen erfassen, Karten anlegen, Indexe und Log, Lint, Prüfvermerke, APA/CSL/RIS-Export, HTML-Dashboard. Nutzen, sobald Wiki-Karten gelesen, angelegt, belegt, geprüft oder exportiert werden, und immer, bevor Wiki-Werkzeuge, Wiki-Skills, Wiki-Skripte, Hooks oder Lint-Regeln gebaut oder geändert werden – auch in Projekten mit eigenem Alt-Werkzeug.
+description: Das eine gemeinsame Werkzeug für alle Wissens-Wikis im Open Knowledge Format v0.2 nach dem pi-llm-wiki-Muster (jedes Projekt mit wiki.toml und jedes neue Wiki) – Recall, Quellen erfassen, Karten anlegen, Indexe und Log, Lint, Prüfvermerke, APA/CSL/RIS-Export, HTML-Dashboard. Nutzen, sobald Wiki-Karten gelesen, angelegt, belegt, geprüft oder exportiert werden, und immer, bevor Wiki-Werkzeuge, Wiki-Skills, Wiki-Skripte, Hooks oder Lint-Regeln gebaut oder geändert werden – auch in Projekten mit eigenem Alt-Werkzeug. okfw ist ein allgemeines Werkzeug, um Wissen aus Quellen zu sammeln, zu belegen und zu prüfen, und nicht dazu bestimmt, Empfehlungen für einzelne Personen zu geben; die Zweckbestimmung steht im README des Plugins.
 ---
 
 # okfw (gemeinsamer Kern)
