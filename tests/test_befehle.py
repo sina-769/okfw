@@ -6,7 +6,7 @@ import subprocess
 from .hilfe import CORE, UV, WikiTest, clean_env
 
 ALT = {"by": "human:frueher", "at": "2020-01-01T00:00:00Z"}
-ACTOR = "claude-code/claude-opus-5-5"   # [wiki] actor im Profil default
+ACTOR = "claude-code/unknown"   # [wiki] actor im Profil default
 
 
 class GeneratedNachziehen(WikiTest):

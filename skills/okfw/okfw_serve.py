@@ -1,4 +1,5 @@
 """okfw serve: dasselbe Dashboard, aber Karten sind bearbeitbar. Nur lokal, nur mit Token, nur über die Funktionen des Kerns.
+Modellaufrufe laufen als Aufträge im Hintergrund (okfw_auftraege.py) und kommen als Vorschlag zurück.
 
 Der Server liest und schreibt im Bundle. Außerhalb liest er die wiki.toml, die Designdatei im Projektordner und Vorlagen
 (neben der wiki.toml oder im Skill) und schreibt nur die Designdatei und die Nutzerdatei von rollen.py.
@@ -13,6 +14,7 @@ import contextlib
 import hmac
 import http.cookies
 import http.server
+import itertools
 import json
 import os
 import re
@@ -30,18 +32,19 @@ from pathlib import Path
 HIER = Path(__file__).resolve().parent
 if str(HIER) not in sys.path:
     sys.path.insert(0, str(HIER))
+import okfw_auftraege  # noqa: E402
 import rollen  # noqa: E402
+from okfw_auftraege import Fehler  # noqa: E402
 
 MAX_ANFRAGE = 2 * 1024 * 1024
 MAX_SVG = 200 * 1024
 MAX_CSS = 256 * 1024
-MAX_SEITE_FUER_MODELL = 200_000
 GESCHUETZT = ("status", "verified", "generated")
 COOKIE = "okfw_sitzung"   # Vorsilbe; dahinter eine Kennung je Serverstart
 MARKE = '<script type="application/json" id="okf-data">'
-VORSCHLAG_ZEIT = 1900   # etwas mehr als das Zeitlimit von rollen.py
-AUFTRAG_VORSCHLAG = ("Gib den vollständigen überarbeiteten Körper der Seite zurück, nur Markdown, ohne Frontmatter. "
-                     "Fußnoten und Links bleiben erhalten; erfinde keine Quellen.")
+# Die Schreibschicht in dieser Folge; `render_dashboard` kennt keine davon, die Datei zum Weitergeben bleibt ohne sie
+SERVE_CSS = ("serve.css", "auftraege.css")
+SERVE_JS = ("serve.js", "auftraege.js", "auftrag_bearbeiten.js", "auftrag_schaubild.js", "auftrag_quelle.js")
 HARNESS_KANN = {
     "sitzung": "Die laufende Claude-Code-Sitzung als Unteragent. Der Server startet keinen Prozess und kann sie nicht bedienen.",
     "claude": "claude -p ohne Werkzeuge. Mit Anthropic über die Anmeldung, mit anderen Anbietern über einen Anthropic-kompatiblen Endpunkt.",
@@ -57,17 +60,10 @@ VARIABLEN = {
     "warning": "Warnmarke", "edge": "Kanten im Graphen", "edge-hi": "Kanten, hervorgehoben", "wash": "leichte Tönung",
     "shadow": "Schatten", "code-bg": "Hintergrund von Code im Text", "pre-bg": "Hintergrund von Codeblöcken",
     "pre-ink": "Schrift in Codeblöcken", "font-heading": "Schrift der Überschriften", "font-body": "Schrift im Text",
-    "font-mono": "Schrift für Code",
+    "font-mono": "Schrift für Code", "font-lesen": "Schrift beim Lesen einer Karte", "schild": "Kopf als Schild",
+    "auf-schild": "Schrift auf dem Schild", "linie": "Linie durch die Stationen", "haltestelle": "Füllung der Haltestellen",
+    "okfw-dauer": "Dauer der Übergänge", "okfw-kurve": "Verlauf der Übergänge",
 }
-
-
-class Fehler(Exception):
-    """Klartext-Fehler für die Oberfläche; extra kommt mit ins JSON."""
-
-    def __init__(self, text, code=400, extra=None):
-        super().__init__(text)
-        self.code = code
-        self.extra = extra or {}
 
 
 def design_problem(css: str, core=None) -> str:
@@ -80,19 +76,13 @@ def design_problem(css: str, core=None) -> str:
         return "„</style“ ist nicht erlaubt"
     if re.search(r"@import", css, re.I):
         return "@import lädt Fremdes nach und ist nicht erlaubt"
-    if re.search(r"image-set\(|expression\(|javascript:|-moz-binding|behavior\s*:", css, re.I):
+    if re.search(r"image-set\(|expression\(|javascript:|-moz-binding|(?<!scroll-)behavior\s*:", css, re.I):
         return "image-set(), expression(), javascript: und behavior sind nicht erlaubt"
     for m in re.finditer(r"url\(\s*(['\"]?)(.*?)\1\s*\)", css, re.I | re.S):
         ziel = m.group(2).strip().lower()
         if not (ziel.startswith("#") or ziel.startswith("data:")):
             return f"url({m.group(2).strip()}) zeigt weder auf # noch auf data:"
     return ""
-
-
-def rollen_aufruf(argv: list[str], arbeitsordner: str) -> tuple[int, str, str]:
-    """Der einzige Weg, auf dem eine Seite zu einem Modell geht; die Tests ersetzen ihn."""
-    lauf = subprocess.run(argv, capture_output=True, text=True, timeout=VORSCHLAG_ZEIT, cwd=arbeitsordner)
-    return lauf.returncode, lauf.stdout, lauf.stderr
 
 
 class Sitzung:
@@ -107,9 +97,9 @@ class Sitzung:
         self.praefix = secrets.token_urlsafe(12)
         self.cookie = f"{COOKIE}_{secrets.token_hex(4)}"
         self.lock = threading.RLock()
-        self.vorschlaege: dict[str, dict] = {}
-        self.assets = {"css": (HIER / "templates" / "serve.css").read_text(encoding="utf-8"),
-                       "js": (HIER / "templates" / "serve.js").read_text(encoding="utf-8")}
+        self.auftraege = okfw_auftraege.Auftraege(self)
+        self.assets = {"css": "\n".join((HIER / "templates" / n).read_text(encoding="utf-8") for n in SERVE_CSS),
+                       "js": [(HIER / "templates" / n).read_text(encoding="utf-8") for n in SERVE_JS]}
 
     # ---------------------------------------------------------------- Grundlagen
 
@@ -162,11 +152,13 @@ class Sitzung:
 
     def dashboard(self, nonce: str) -> str:
         with self.lock:
-            html = self.wiki().render_dashboard(csp=False)
+            wiki = self.wiki()
+            html = wiki.render_dashboard(csp=False)
         if html.count(MARKE) != 1:
             raise Fehler("Die Daten-Marke der Vorlage steht nicht genau einmal in der Seite; steht sie im Design oder in einer Karte?", 500)
-        start = "window.OKFW_SERVE = " + json.dumps({"version": self.core.VERSION}) + ";"
-        einsatz = f"<style>{self.assets['css']}</style>\n<script>{start}</script>\n<script>{self.assets['js']}</script>\n"
+        start = "window.OKFW_SERVE = " + json.dumps({"version": self.core.VERSION}).replace("<", "\\u003c") + ";"
+        skripte = "".join(f"<script>{js}</script>\n" for js in self.assets["js"])
+        einsatz = f"<style>{self.assets['css']}</style>\n<script>{start}</script>\n{skripte}"
         html = html.replace(MARKE, einsatz + MARKE)
         return re.sub(r"<script(?=[\s>])", f'<script nonce="{nonce}"', html)
 
@@ -198,7 +190,7 @@ class Sitzung:
         geaendert = [k for k in GESCHUETZT if neu.get(k, fehlt) != p.fm.get(k, fehlt)]
         if geaendert:
             raise Fehler(f"Geschützte Felder lassen sich hier nicht ändern: {', '.join(geaendert)}. status und verified "
-                         "setzt nur die Freigabe, generated zieht der Kern nach; der Prüfwert "
+                         "setzen nur Freigabe und Ablösen, generated zieht der Kern nach; der Prüfwert "
                          f"({core.VERIFIED_HASH}) steht in verified.", 422)
         probe = text
         for k in GESCHUETZT:
@@ -257,15 +249,21 @@ class Sitzung:
             felder = ", ".join(k for k in (neu_fm or {}) if (p.fm or {}).get(k, object()) != neu_fm[k]) if fm_geaendert else ""
             detail = "Im Dashboard bearbeitet"
             if body_geaendert:
-                vorschlag = self.vorschlaege.get(p.id) if data.get("vorschlag") else None
-                if vorschlag:
-                    gleich = core.body_sha256(body) == vorschlag["sha"]
-                    detail += (f"; Textvorschlag der Rolle bearbeiten ({vorschlag['harness']}, {vorschlag['anbieter']}, "
-                               f"{vorschlag['modell']}) " + ("unverändert übernommen" if gleich else "überarbeitet übernommen"))
+                vermerk = None
+                vorschlag = self.auftraege.herkunft(p.id)
+                gleich = bool(vorschlag) and core.body_sha256(body) == vorschlag["sha"]   # auch von Hand hineinkopiert
+                if data.get("vorschlag") or gleich:
+                    # Ist die Datei des Vorschlags weg, ist nur noch bekannt, dass der Text von einem Modell kam
+                    quelle = vorschlag or {"harness": "dashboard", "anbieter": "", "modell": core.MODELL_UNBEKANNT}
+                    vermerk = {"harness": quelle["harness"], **({"anbieter": quelle["anbieter"]} if quelle["anbieter"] else {}),
+                               "modell": quelle["modell"] or core.MODELL_UNBEKANNT, "rolle": "bearbeiten",
+                               "art": "vorschlag" if gleich else "vorschlag-bearbeitet"}
+                    detail += (f"; Textvorschlag der Rolle bearbeiten ({quelle['harness']}, {quelle['anbieter']}, "
+                               f"{quelle['modell']}) " + ("unverändert übernommen" if gleich else "überarbeitet übernommen"))
                 if felder:
                     detail += f"; Eigenschaften: {felder}"
                 wiki._pages = None
-                wiki.replace_body(p.id, body, detail)
+                wiki.replace_body(p.id, body, detail, modell=vermerk)
             else:
                 wiki._pages = None
                 parsed = wiki.parse(p.path)
@@ -305,36 +303,216 @@ class Sitzung:
             ids = data.get("ids")
             if not isinstance(ids, list) or not ids or not all(isinstance(i, str) for i in ids) or len(ids) > 500:
                 raise Fehler("ids: eine Liste von Seiten-IDs")
+            bestaetigt = data.get("ohne_gegenpruefung", [])
+            if not isinstance(bestaetigt, list) or not all(isinstance(i, str) for i in bestaetigt):
+                raise Fehler("ohne_gegenpruefung: eine Liste von Seiten-IDs")
             bekannt = {p.id for p in wiki.pages()}
             fremd = [i for i in ids if i not in bekannt]
             if fremd:
                 raise Fehler(f"Seite nicht gefunden: {', '.join(fremd)}", 404)
+            abgeloest = sorted(p.id for p in wiki.pages() if p.id in ids and (p.fm or {}).get("status") == "deprecated")
+            if abgeloest:   # stable höbe das Ablösen stillschweigend auf; der Weg zurück führt über verify --status draft
+                raise Fehler(f"Abgelöst, darum keine Freigabe: {', '.join(abgeloest)}. Es wurde nichts geändert.", 422)
             akteur = self.akteur()
+            ohne = [p.id for p in wiki.pages() if p.id in ids and p.fm is not None and wiki.release_state(p)["check"] is None]
+            offen = sorted(set(ohne) - set(bestaetigt))
+            if offen:   # force nur auf ausdrückliche Antwort, und die gilt genau den genannten Seiten
+                raise Fehler(f"Keine Gegenprüfung zum jetzigen Inhalt: {', '.join(offen)}. Es wurde nichts freigegeben.", 409,
+                             {"ohne_gegenpruefung": offen})
             try:
-                wiki.verify_pages(ids, akteur, status="stable", note="Freigabe im Dashboard")
-            except self.core.WikiError as exc:   # --force gibt es nur auf der Befehlszeile, das Dashboard gibt nichts ungeprüft frei
-                raise Fehler(re.sub(r",? oder mit --force[^.;]*", "; das Dashboard gibt ohne Gegenprüfung nichts frei", str(exc)), 422)
+                wiki.verify_pages(ids, akteur, status="stable", note="Freigabe im Dashboard", force=bool(ohne))
+            except self.core.WikiError as exc:
+                raise Fehler(str(exc), 422)
             hinweise = self.neu_bauen(self.wiki())
-            return 200, {"ok": True, "freigegeben": list(dict.fromkeys(ids)), "hinweise": hinweise}
+            return 200, {"ok": True, "freigegeben": list(dict.fromkeys(ids)), "ohne_gegenpruefung": ohne, "hinweise": hinweise}
 
-    def abbildung(self, data: dict):
+    # ---------------------------------------------------------------- Ablösen, Löschen, Papierkorb
+
+    def folgen_lesen(self, pid):
+        with self.lock:
+            wiki = self.wiki()
+            p = self.seite(wiki, pid)
+            folgen = wiki.folgen(p.id)
+            return 200, {"hash": self.core.sha256_of(p.path), "folgen": folgen, "zeilen": self.core.folgen_zeilen(folgen, 15)}
+
+    def unveraendert(self, wiki, data: dict):
+        """Die Karte, wie sie beim Fragen war: Die Antwort der Person galt diesem Stand und diesen Folgen."""
+        p = self.seite(wiki, data.get("id"))
+        if data.get("hash") != self.core.sha256_of(p.path):
+            raise Fehler("Die Seite hat sich seit dem Laden geändert. Es wurde nichts geändert.", 409)
+        return p
+
+    def abloesen(self, data: dict):
+        with self.lock:
+            wiki = self.wiki()
+            p = self.unveraendert(wiki, data)
+            nachfolger, notiz = data.get("nachfolger"), data.get("notiz")
+            for name, wert in (("nachfolger", nachfolger), ("notiz", notiz)):
+                if wert is not None and not isinstance(wert, str):
+                    raise Fehler(f"{name} muss Text sein")
+            akteur = self.akteur()
+            wiki.actor = akteur
+            fertig = wiki.deprecate_page(p.id, akteur, nachfolger=nachfolger or None, note=notiz or "")
+            frisch = self.wiki()
+            return 200, {"ok": True, **fertig, "hinweise": self.neu_bauen(frisch)}
+
+    def loeschen(self, data: dict):
+        with self.lock:
+            wiki = self.wiki()
+            p = self.unveraendert(wiki, data)
+            bestaetigt, roh = data.get("belege_bestaetigt", []), data.get("rohquelle", False)
+            if not isinstance(bestaetigt, list) or not all(isinstance(s, str) for s in bestaetigt):
+                raise Fehler("belege_bestaetigt: eine Liste von Seiten-IDs")
+            if not isinstance(roh, bool):
+                raise Fehler("rohquelle: true oder false")
+            akteur = self.akteur()
+            folgen = wiki.folgen(p.id)
+            offen = sorted({b["seite"] for b in folgen["belege"]} - set(bestaetigt))
+            if offen:
+                raise Fehler(f"Belege brächen, ohne Bestätigung: {', '.join(offen)}. Es wurde nichts gelöscht.", 409,
+                             {"folgen": folgen, "zeilen": self.core.folgen_zeilen(folgen, 15)})
+            wiki.actor = akteur
+            fertig = wiki.delete_page(p.id, akteur, belege_brechen=bool(folgen["belege"]), mit_rohquelle=roh)
+            frisch = self.wiki()
+            return 200, {"ok": True, "eintrag": fertig["eintrag"], "seite": fertig["seite"], "hinweise": self.neu_bauen(frisch),
+                         "befunde_gesamt": self.befunde(frisch)["befunde_gesamt"]}
+
+    def papierkorb_lesen(self):
+        with self.lock:
+            return 200, {"eintraege": self.wiki().papierkorb()}
+
+    def wiederherstellen(self, data: dict):
+        with self.lock:
+            wiki = self.wiki()
+            akteur = self.akteur()
+            wiki.actor = akteur
+            fertig = wiki.restore_page(data.get("eintrag"), akteur)
+            frisch = self.wiki()
+            return 200, {"ok": True, **fertig, "hinweise": self.neu_bauen(frisch),
+                         "eintraege": frisch.papierkorb()}
+
+    def abbildung_auskunft(self, wiki, name: str, vorhanden: bool) -> dict:
+        """Für den Dialog: ein freier Name und die Seiten, die eine vorhandene Abbildung schon zeigen."""
+        if not vorhanden:
+            return {"vorhanden": False}
+        stamm = re.sub(r"-\d+$", "", name)
+        zahl = next(n for n in itertools.count(2) if not os.path.lexists(wiki.figure_file(f"{stamm}-{n}")))
+        return {"vorhanden": True, "vorschlag": f"{stamm}-{zahl}",
+                "genutzt_auf": [p.title or p.id for p in wiki.pages()
+                                if any(ref["name"] == name for ref in wiki.figure_refs(p.body))]}
+
+    # ---------------------------------------------------------------- Pfade
+
+    def pfad_stand(self, wiki, p) -> dict:
+        stationen, _, meldungen = wiki.pfad_stationen(p)
+        seiten = {q.id: q for q in wiki.pages()}
+        for s in stationen:
+            for e in s["elemente"]:
+                if e.get("id"):
+                    e["titel"], e["stand"] = seiten[e["id"]].title, wiki.karte_stand(seiten[e["id"]])
+        return {"id": p.id, "titel": p.title, "raster": wiki.pfad_raster(p),
+                "hash": self.core.sha256_of(p.path), "stationen": stationen, "befunde": wiki.pfad_befunde(p),
+                "meldungen": meldungen,
+                "karten": [{"id": q.id, "titel": q.title, "typ": q.type or "?"} for q in wiki.pages()
+                           if q.fm is not None and q.type != "pfad"]}
+
+    def pfad_finden(self, wiki, pid):
+        try:
+            p = wiki.pfad_seite(pid)
+        except self.core.WikiError as exc:
+            raise Fehler(str(exc), 404)
+        if p is None:
+            raise Fehler("Der Standardpfad steht in keiner Datei. Erst in eine Datei übernehmen, dann bearbeiten.", 404)
+        return p
+
+    def pfad_lesen(self, pid):
+        with self.lock:
+            wiki = self.wiki()
+            return 200, self.pfad_stand(wiki, self.pfad_finden(wiki, pid))
+
+    def pfad_speichern(self, data: dict):
+        pid, gesehen, stationen = data.get("id"), data.get("hash"), data.get("stationen")
+        if not isinstance(pid, str) or not isinstance(gesehen, str) or not isinstance(stationen, list):
+            raise Fehler("id, hash und stationen fehlen")
+        with self.lock:
+            wiki = self.wiki()
+            p = self.pfad_finden(wiki, pid)
+            if self.core.sha256_of(p.path) != gesehen:
+                raise Fehler("Dieser Pfad hat sich seit dem Laden geändert. Es wurde nichts überschrieben.", 409,
+                             {"aktuell": self.pfad_stand(wiki, p)})
+            wiki.actor = self.akteur()
+            try:
+                geaendert = wiki.pfad_speichern(p.id, stationen)
+            except self.core.WikiError as exc:
+                raise Fehler(str(exc), 422)
+            frisch = self.wiki()
+            hinweise = self.neu_bauen(frisch) if geaendert else []
+            return 200, {"ok": True, "geaendert": geaendert, **self.pfad_stand(frisch, self.pfad_finden(frisch, pid)), "hinweise": hinweise}
+
+    def pfad_neu(self, data: dict):
+        titel = data.get("titel")
+        if not isinstance(titel, str) or not titel.strip():
+            raise Fehler("Titel fehlt", 422)
+        with self.lock:
+            wiki = self.wiki()
+            wiki.actor = self.akteur()
+            try:
+                pfad = wiki.pfad_neu(titel)
+            except self.core.WikiError as exc:
+                raise Fehler(str(exc), 422)
+            frisch = self.wiki()
+            hinweise = self.neu_bauen(frisch)
+            return 200, {"ok": True, "id": wiki.page_id(pfad), "hinweise": hinweise}
+
+    def pfad_uebernehmen(self, data: dict):
+        with self.lock:
+            wiki = self.wiki()
+            wiki.actor = self.akteur()
+            try:
+                bericht = wiki.pfad_uebernehmen()
+            except self.core.WikiError as exc:
+                raise Fehler(str(exc), 422)
+            return 200, {"ok": True, **bericht, "hinweise": self.neu_bauen(self.wiki())}
+
+    def abbildung(self, data: dict, rolle: str | None = None, modell: str | None = None):
+        """rolle und modell setzt nur ein angenommener Vorschlag, nie eine Anfrage. Mit pruefen nur die Auskunft (bereinigt, Vorschau, Verluste, Namenskonflikt), ohne zu schreiben. Sonst legt der
+        Kern ab; eine vorhandene Abbildung nur mit ersetzen, sonst 409 mit derselben Auskunft."""
         core = self.core
-        name, svg = data.get("name"), data.get("svg")
+        name, svg, ersetzen, pruefen = data.get("name"), data.get("svg"), data.get("ersetzen", False), data.get("pruefen", False)
         if not isinstance(name, str) or not isinstance(svg, str):
             raise Fehler("name und svg fehlen")
+        if not isinstance(ersetzen, bool) or not isinstance(pruefen, bool):
+            raise Fehler("ersetzen und pruefen sind ja oder nein")
         name = name.strip().removesuffix(".svg")
         if not core.SLUG_RE.fullmatch(name):
             raise Fehler("Name: nur kleine Buchstaben, Ziffern und Bindestriche (kebab-case)", 422)
-        if len(svg.encode("utf-8")) > MAX_SVG:
-            raise Fehler(f"Das SVG ist größer als {MAX_SVG // 1024} KB", 422)
+        try:
+            roh = svg.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise Fehler("Das SVG ist kein gültiges UTF-8", 422) from exc
+        if len(roh) > MAX_SVG:
+            raise Fehler(f"Das SVG ist größer als {MAX_SVG // 1024} KB: Abbildung vereinfachen", 422)
+        try:
+            vorschau, entfernt = core.clean_svg(roh, prefix="vorschau-")
+        except core.FigureError as exc:
+            raise Fehler(f"Das SVG wurde abgelehnt: {exc}", 422) from exc
         with self.lock:
             akteur = self.akteur()
+            wiki = self.wiki()
+            vorhanden = os.path.lexists(wiki.figure_file(name))
+            if pruefen:
+                return 200, {"ok": True, "name": name, "svg": vorschau, **core.svg_verlust(entfernt),
+                             **self.abbildung_auskunft(wiki, name, vorhanden)}
+            if vorhanden and not ersetzen:
+                raise Fehler(f"Es gibt schon eine Abbildung {name}. Ersetzen oder einen anderen Namen wählen.", 409,
+                             self.abbildung_auskunft(wiki, name, vorhanden))
             ordner = tempfile.mkdtemp(prefix="okfw-abb-")
             try:
                 datei = Path(ordner) / f"{name}.svg"
                 datei.write_text(svg, encoding="utf-8")
                 # ein eigener Prozess: Kein Umgebungswechsel im laufenden Server, kein SystemExit aus der Kommandozeile
-                lauf = subprocess.run([sys.executable, core.__file__, "--config", str(self.config_path), "abbildung", name, "--file", str(datei)],
+                lauf = subprocess.run([sys.executable, core.__file__, "--config", str(self.config_path), "abbildung", name, "--file", str(datei),
+                                       *(["--ersetzen"] if ersetzen else []), *(["--rolle", rolle, "--modell", modell] if rolle else [])],
                                       env={**os.environ, "WIKI_ACTOR": akteur}, capture_output=True, text=True, timeout=120)
             finally:
                 shutil.rmtree(ordner, ignore_errors=True)
@@ -344,7 +522,8 @@ class Sitzung:
                     raise Fehler(f"Der Kern ist beim Ablegen gescheitert: {text.splitlines()[-1]}", 500)
                 raise Fehler(text.removeprefix("okfw: ") or "abbildung scheiterte", 422)
             return 200, {"ok": True, "name": name, "pfad": f"/abbildungen/{name}.svg",
-                         "einbindung": f"![Titel](/abbildungen/{name}.svg)", "ausgabe": lauf.stdout.strip()}
+                         "einbindung": f"![Titel](/abbildungen/{name}.svg)", "ausgabe": lauf.stdout.strip(),
+                         "ersetzt": vorhanden, **core.svg_verlust(entfernt)}
 
     # ---------------------------------------------------------------- Einstellungen
 
@@ -474,91 +653,6 @@ class Sitzung:
 
     # ---------------------------------------------------------------- Vorschlag eines Modells
 
-    def fussnoten_pruefung(self, alt: str, neu: str, quellen: set[str]) -> list[str]:
-        core = self.core
-        refs = lambda text: set(core.FOOTNOTE_REF_RE.findall(core.CODE_RE.sub("", text)))
-        links = lambda text: set(core.LINK_RE.findall(core.CODE_RE.sub("", text)))
-        a, n = refs(alt), refs(neu)
-        warnungen = []
-        if a - n:
-            warnungen.append("Fußnoten verschwunden: " + ", ".join(f"[^{x}]" for x in sorted(a - n)))
-        if n - a:
-            warnungen.append("Neue Fußnoten: " + ", ".join(f"[^{x}]" for x in sorted(n - a))
-                             + ". Das Modell soll keine Quellen erfinden; prüfe jede.")
-        ohne = sorted(x for x in n if x not in quellen)
-        if ohne:
-            warnungen.append("Ohne sources-Eintrag in den Eigenschaften: " + ", ".join(f"[^{x}]" for x in ohne))
-        if links(alt) - links(neu):
-            warnungen.append("Links verschwunden: " + ", ".join(sorted(links(alt) - links(neu))))
-        return warnungen
-
-    def vorschlag(self, data: dict):
-        core = self.core
-        anweisung = data.get("anweisung")
-        if not isinstance(anweisung, str) or not anweisung.strip():
-            raise Fehler("anweisung fehlt: Was soll sich an der Seite ändern?")
-        if len(anweisung) > 4000:
-            raise Fehler("Die Anweisung ist länger als 4000 Zeichen", 422)
-        with self.lock:
-            wiki = self.wiki()
-            p = self.seite(wiki, data.get("id"))
-            cfg = self.cfg()
-            ziel = rollen.loese(cfg, "bearbeiten")
-            if ziel["harness"] == "sitzung":
-                raise Fehler("Die Rolle „Bearbeiten per Prompt“ läuft in der Sitzung; der Server kann sie nicht bedienen. "
-                             "Stelle sie in den Einstellungen auf claude, opencode oder direkt.", 422)
-            if ziel["gesperrt"]:
-                raise Fehler(f"Rolle „Bearbeiten per Prompt“: {ziel['gesperrt']}", 422)
-            # Standard ist der gespeicherte Text; das Dashboard schickt den Stand im Textfeld mit, damit der Vorschlag darauf aufbaut
-            body = data.get("body") if isinstance(data.get("body"), str) else p.body
-            body = body.strip("\n")
-            if len(body) > MAX_SEITE_FUER_MODELL:
-                raise Fehler("Die Seite ist für einen Modellaufruf zu lang", 422)
-            warnungen = []
-            if p.id in {q.id for q in wiki.source_cards()}:
-                wert, hinweis = wiki.rights_of(p).get("ki_auswertung", ("ja", ""))
-                if wert == "nein":
-                    raise Fehler(f"Rechte: KI-Auswertung ist für diese Quelle nicht erlaubt ({hinweis})", 422)
-                if wert != "ja":
-                    warnungen.append(f"Rechte: KI-Auswertung nur {core.RIGHT_WORDS.get(wert, wert)} ({hinweis}). "
-                                     "Es geht nur diese Seite hinaus, kein Volltext.")
-            quellen = {str(e["id"]) for e in core.as_list((p.fm or {}).get("sources")) if isinstance(e, dict) and e.get("id")}
-            config = str(self.config_path)
-        ordner = tempfile.mkdtemp(prefix="okfw-vorschlag-")
-        os.chmod(ordner, 0o700)
-        try:
-            auftrag, seite = Path(ordner) / "auftrag.md", Path(ordner) / "seite.md"
-            auftrag.write_text(f"{AUFTRAG_VORSCHLAG}\n\nAnweisung der Person:\n{anweisung.strip()}\n", encoding="utf-8")
-            seite.write_text(body, encoding="utf-8")
-            argv = [sys.executable, "-I", str(HIER / "rollen.py"), "--wiki", config, "auftrag", "--rolle", "bearbeiten",
-                    "--datei", str(auftrag), "--anhang", str(seite), "--json"]
-            code, aus, fehler = rollen_aufruf(argv, ordner)
-        finally:
-            shutil.rmtree(ordner, ignore_errors=True)
-        if code != 0:
-            text = (fehler or aus).strip().removeprefix("rollen: ") or f"rollen.py endete mit Exit {code}"
-            raise Fehler(text, 502 if code == rollen.EXIT_HARNESS else 422)
-        try:
-            antwort = json.loads(aus)
-            text = str(antwort["text"])
-        except (ValueError, KeyError, TypeError):
-            raise Fehler("Unerwartete Antwort von rollen.py (kein JSON mit text)", 502)
-        text = text.strip()
-        m = re.fullmatch(r"```(?:markdown|md)?[ \t]*\n(.*?)\n```", text, re.S)
-        if m:
-            text = m.group(1).strip()
-        if text.startswith("---\n"):
-            rest = core.split_frontmatter(text + ("" if text.endswith("\n") else "\n"))
-            if rest[0] is not None:
-                text = rest[1].strip()
-                warnungen.append("Das Modell hat Frontmatter mitgeschickt; es wurde weggelassen.")
-        warnungen += self.fussnoten_pruefung(body, text, quellen)
-        rolle = {k: antwort.get(k, "") for k in ("harness", "anbieter", "modell")}
-        with self.lock:
-            self.vorschlaege[p.id] = {"sha": core.body_sha256(text), **rolle}
-        return 200, {"vorschlag": text, "warnungen": warnungen, "rolle": rolle,
-                     "gesendet": {"seite": p.id, "zeichen": len(body), "anhaenge": 1}, "dauer_s": antwort.get("dauer_s")}
-
 
 class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
@@ -566,6 +660,10 @@ class Server(http.server.ThreadingHTTPServer):
     def __init__(self, adresse, sitzung: Sitzung):
         self.sitzung = sitzung
         super().__init__(adresse, Griff)
+
+    def server_close(self):
+        self.sitzung.auftraege.beenden()
+        super().server_close()
 
     @property
     def hosts(self):
@@ -659,9 +757,14 @@ class Griff(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(roh)
                 return
             routen = {"/api/seite": lambda: sitzung.seite_lesen((abfrage.get("id") or [""])[0]),
+                      "/api/folgen": lambda: sitzung.folgen_lesen((abfrage.get("id") or [""])[0]),
+                      "/api/papierkorb": sitzung.papierkorb_lesen,
                       "/api/einstellungen": sitzung.einstellungen_lesen,
                       "/api/modelle": lambda: sitzung.modelle((abfrage.get("anbieter") or [""])[0]),
-                      "/api/design": sitzung.design_lesen}
+                      "/api/design": sitzung.design_lesen,
+                      "/api/auftraege": sitzung.auftraege.liste,
+                      "/api/auftrag": lambda: sitzung.auftraege.lesen((abfrage.get("id") or [""])[0]),
+                      "/api/pfad": lambda: sitzung.pfad_lesen((abfrage.get("id") or [""])[0])}
             if pfad not in routen:
                 return self.fehler(404, "Nicht gefunden")
             code, daten = routen[pfad]()
@@ -683,6 +786,8 @@ class Griff(http.server.BaseHTTPRequestHandler):
             return self.fehler(403, "Nicht angemeldet. Öffne die Start-URL aus dem Terminal.")
         if not self.headers.get("X-OKFW"):
             return self.fehler(403, "Kopf X-OKFW fehlt")
+        if pfad == "/api/quelle/datei":
+            return self.quelle_datei()
         if not (self.headers.get("Content-Type") or "").lower().startswith("application/json"):
             return self.fehler(415, "Content-Type muss application/json sein")
         try:
@@ -701,13 +806,34 @@ class Griff(http.server.BaseHTTPRequestHandler):
                   "/api/freigabe": sitzung.freigeben, "/api/abbildung": sitzung.abbildung,
                   "/api/einstellungen/rolle": sitzung.rolle_setzen, "/api/einstellungen/anbieter": sitzung.anbieter_setzen,
                   "/api/einstellungen/person": sitzung.person_setzen, "/api/design": sitzung.design_speichern,
-                  "/api/vorschlag": sitzung.vorschlag}
+                  "/api/auftrag": sitzung.auftraege.starten, "/api/auftrag/abbrechen": sitzung.auftraege.abbrechen,
+                  "/api/vorschlag/annehmen": sitzung.auftraege.annehmen, "/api/vorschlag/verwerfen": sitzung.auftraege.verwerfen,
+                  "/api/quelle/klaeren": sitzung.auftraege.klaeren, "/api/quelle/karte": sitzung.auftraege.karte_ohne_modell,
+                  "/api/abloesen": sitzung.abloesen,
+                  "/api/loeschen": sitzung.loeschen, "/api/wiederherstellen": sitzung.wiederherstellen,
+                  "/api/pfad": sitzung.pfad_speichern, "/api/pfad/neu": sitzung.pfad_neu,
+                  "/api/pfad/uebernehmen": sitzung.pfad_uebernehmen}
         if pfad not in routen:
             return self.fehler(404, "Nicht gefunden")
         try:
             code, antwort = routen[pfad](daten)
             self.json_antwort(code, antwort)
         except Exception as exc:  # noqa: BLE001
+            self.ausnahme(exc)
+
+    def quelle_datei(self):
+        """Dateien statt JSON, mit eigener Grenze. Die Prüfungen von do_POST sind hier schon gelaufen."""
+        try:
+            laenge = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            return self.fehler(411, "Content-Length fehlt")
+        if laenge < 0:
+            return self.fehler(400, "Content-Length ist ungültig")
+        try:
+            code, antwort = self.server.sitzung.auftraege.datei_annehmen(self.rfile, laenge, self.headers.get("Content-Type") or "", self.headers.get("X-OKFW-Name") or "")
+            self.json_antwort(code, antwort)
+        except Exception as exc:  # noqa: BLE001
+            self.close_connection = True   # der Rest der Datei kommt nicht mehr an
             self.ausnahme(exc)
 
     def ausnahme(self, exc):

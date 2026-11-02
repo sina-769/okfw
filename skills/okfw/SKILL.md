@@ -71,7 +71,7 @@ bestehenden Wiki tut das `gitattributes`. Nach einem Merge `git merge --no-ff --
 5. **`access` ehrlich halten.** `citation` = nur Metadaten; Inhalt bleibt `> [!todo]`, keine Belege für Aussagen. `abstract` = Aussagen als abstract-basiert kennzeichnen („(Abstract)“). `fulltext` und gleichrangige Profilwerte (`[lint] fulltext_access`, z. B. `originaldokument`) = Kernaussagen mit Fundstelle (S., Tab., Abschn., Art., Abs., Zeile).
 6. **Nichts erfinden.** Lücken bleiben `> [!todo]`. Keine Stub-Seiten für fehlende Links anlegen.
 7. **Widersprüche auf beiden Seiten** markieren: `> ⚠️ **Widerspruch:** A sagt X, B sagt Y.`
-8. **Vertrauen nach OKF.** `generated: {by, at}` bei jeder inhaltlichen Änderung nachziehen: `body`, `sources`, `lizenz` und `fundweg` tun das selbst, nach Edit oder Write am Körper der PostToolUse-Hook (`body --nachziehen`); dennoch Inhalte bevorzugt mit `body` schreiben und fehlende Quellen mit `sources <seite> --add …` nachtragen statt mit Edit. `verified` nur für eine inhaltliche Prüfung am Original, über `verify`: `human:<id>` nur, wenn ein Mensch geprüft hat; eine Volltextprüfung durch Claude trägt den Akteur aus `[wiki] actor`. Ein Metadatenabgleich (Crossref, PubMed) ist keine inhaltliche Prüfung und gehört in ein eigenes Feld (z. B. `metadaten_geprueft`), nicht in `verified`. `status: stable` erst mit `verified` durch `human:<id>`; ein `verify`-Vermerk durch Claude (Akteur aus `[wiki] actor`) hält die Prüfung fest, hebt den Status aber nicht; `verify --status stable` lehnt andere Akteure ab. Jeder Vermerk trägt den Prüfwert des Inhalts: Ändert er sich danach, verfällt die Freigabe (`body` setzt stable auf draft, Lint `verified_outdated`), und `status` und `verified` ändert nur `verify` und `body` (auch `--nachziehen`), das eine stable-Seite auf draft setzt, nie Edit oder Write (der Guard blockiert das). Eine Freigabe durch `human:<id>` setzt eine Gegenprüfung durch Claude oder einen Prozess zum selben Inhalt voraus; eine Charge gibt der Mensch über „Zur Freigabe“ im Dashboard mit einem `verify`-Aufruf für alle Seiten frei.
+8. **Vertrauen nach OKF.** `generated: {by, at}` bei jeder inhaltlichen Änderung nachziehen: `body`, `sources`, `lizenz` und `fundweg` tun das selbst, nach Edit oder Write am Körper der PostToolUse-Hook (`body --nachziehen`); dennoch Inhalte bevorzugt mit `body` schreiben und fehlende Quellen mit `sources <seite> --add …` nachtragen statt mit Edit. `verified` nur für eine inhaltliche Prüfung am Original, über `verify`: `human:<id>` nur, wenn ein Mensch geprüft hat; eine Volltextprüfung durch Claude trägt den Akteur aus `[wiki] actor`. Ein Metadatenabgleich (Crossref, PubMed) ist keine inhaltliche Prüfung und gehört in ein eigenes Feld (z. B. `metadaten_geprueft`), nicht in `verified`. `status: stable` erst mit `verified` durch `human:<id>`; ein `verify`-Vermerk durch Claude (Akteur aus `[wiki] actor`) hält die Prüfung fest, hebt den Status aber nicht; `verify --status stable` lehnt andere Akteure ab. Jeder Vermerk trägt den Prüfwert des Inhalts: Ändert er sich danach, verfällt die Freigabe (`body` setzt stable auf draft, Lint `verified_outdated`), und `status` und `verified` ändert nur `verify` und `body` (auch `--nachziehen`), das eine stable-Seite auf draft setzt, nie Edit oder Write (der Guard blockiert das). `generated.modelle` nennt die Modelle, die am Körper beteiligt waren, und bleibt nach Übernehmen, Freigeben und Bearbeiten stehen; es schreibt nur der Kern, der Guard blockiert Edit und Write. Text aus einer Rolle mit `body --rolle <rolle>` schreiben; läuft `body` per Bash in einer Sitzung, `WIKI_ACTOR=claude-code/<eigene Modellkennung>` setzen, wenn sie sicher bekannt ist, nach Edit und Write nennt der Hook das Modell selbst. Eine Freigabe durch `human:<id>` setzt eine Gegenprüfung durch Claude oder einen Prozess zum selben Inhalt voraus; eine Charge gibt der Mensch über „Zur Freigabe“ im Dashboard mit einem `verify`-Aufruf für alle Seiten frei.
 9. **Frische.** Momentaufnahmen, Praxisbeschreibungen, Entwürfe, lebende Dokumente und Rechtsstände bekommen `stale_after` (Profil: `stale_months`).
 10. **Unbekannte Felder erhalten.** Frontmatter nicht neu serialisieren; gezielt editieren.
 11. **Internes bleibt intern.** Was nicht nach außen darf (OPSEC: Kunden, Geschäftsideen, Pläne, Zahlen), trägt `sichtbarkeit: intern`, sobald die `wiki.toml` `[visibility]` hat. Den Schalter in einem Projekt nur nach ausdrücklicher Freigabe setzen. Öffentliche Seiten verlinken und belegen nicht auf interne. Weitergegeben wird nur `dashboard --oeffentlich`, nie die normale Ausgabe.
@@ -154,15 +154,17 @@ uv run --no-config --quiet ~/.claude/skills/okfw/okfw.py verify concepts/x --by 
 `verify <seite> --by <akteur> --status deprecated` (Seite überholt) darf jeder Akteur setzen, auch Claude mit dem Akteur
 aus `[wiki] actor`; die Seite fällt damit aus `no_footnotes` und aus „Zur Freigabe“.
 
+Karten verschwinden nicht von Hand: `deprecate <seite> --by … [--nachfolger SEITE]` löst ab, die Karte bleibt. `delete <seite>` zeigt die Folgen; das eigentliche Löschen (`--yes --by human:<id>`, in den Papierkorb, zurück mit `restore`) entscheidet die Person, nicht Claude. Belege brechen nur mit `--belege-brechen`, die Rohquelle geht nur mit `--mit-rohquelle` mit.
+
 ## Befehle
 
 `status` · `lint [--strict] [--summary] [--json]` · `rebuild [--check]` · `new <typ> <slug> …` ·
-`capture <slug> --url --file` · `hash <pfad>` · `verify <seite>… --by … [--force]` · `event <ereignisart> <seite> [detail]` ·
-`body <seite> <datei|->` · `sources <seite> --add a,b | --remove c` · `init [--profile …]` · `fundweg <seite> --art …` · `rechte [<seite>] [--aktion …]` ·
-`lizenz <seite> --fetch | --name …` · `lizenz --missing --fetch [--dry-run]` · `abbildung <name> --file x.svg` · `dashboard [--out PFAD] [--oeffentlich] [--open]` · `serve [--port N] [--no-open]`. Optionen und
+`capture <slug> --url --file` · `hash <pfad>` · `verify <seite>… --by … [--force]` · `deprecate <seite> --by …` · `delete <seite>` · `restore [<eintrag>]` · `event <ereignisart> <seite> [detail]` ·
+`body <seite> <datei|->` · `sources <seite> --add a,b | --remove c` · `init [--profile …]` · `gitattributes` · `fundweg <seite> --art …` · `rechte [<seite>] [--aktion …]` ·
+`lizenz <seite> --fetch | --name …` · `lizenz --missing --fetch [--dry-run]` · `abbildung <name> --file x.svg` · `dashboard [--out PFAD] [--oeffentlich] [--open]` · `pfad neu|pruefen|uebernehmen|export` · `serve [--port N] [--no-open]`. Optionen und
 `wiki.toml`-Schlüssel: [docs/konfiguration.md](docs/konfiguration.md).
 
-`serve` startet dasselbe Dashboard lokal mit Bearbeiten (Inhalt, Eigenschaften, Freigabe, neue Karten, Modellvorschlag, Einstellungen), nur auf diesem Rechner, unter einem zufälligen Pfad und mit Token; Karten, Freigaben und Abbildungen schreibt allein der Kern, Akteur ist `human:<kennung>`; Einstellungen und Design schreibt der Server selbst. Die Dashboard-Datei zum Weitergeben bleibt eine Leseansicht ohne Bearbeitungscode. Einzelheiten: [docs/konfiguration.md](docs/konfiguration.md#bearbeiten-im-dashboard).
+`serve` startet dasselbe Dashboard lokal mit Bearbeiten (Inhalt, Eigenschaften, Pfade, Freigabe, neue Karten, Modellvorschlag, Einstellungen), nur auf diesem Rechner, unter einem zufälligen Pfad und mit Token; Karten, Freigaben und Abbildungen schreibt allein der Kern, Akteur ist `human:<kennung>`; Einstellungen und Design schreibt der Server selbst. Die Dashboard-Datei zum Weitergeben bleibt eine Leseansicht ohne Bearbeitungscode. Einzelheiten: [docs/konfiguration.md](docs/konfiguration.md#bearbeiten-im-dashboard).
 
 ## Überblick als Dashboard
 
@@ -178,13 +180,12 @@ Mit `--open` im Standardbrowser öffnen. Unterarten und ihre lesbaren Namen komm
 `[types.X] subtype` und `[labels.<feld>]` in der `wiki.toml`. Als Überschrift dient `[wiki] title` ohne einen
 Zusatz „– zuerst lesen“ (der gehört in den Root-Index).
 
-**Zum Verstehen eines Wikis** kommen dazu: ein **Lernpfad** aus den Seiten mit `[index] entry_tag`
-(Standard `einstieg`) in der Reihenfolge von `order`, mit „weiter/zurück“ in der Leseansicht;
+**Zum Verstehen eines Wikis** kommen dazu: **Pfade** (`type: pfad` in `pfade/`) mit Stationen, mehreren Karten und eigenem Text, zum Lesen und als Vortrag (`pfad export`);
 **Textdiagramme** (```` ```text ````, ASCII-Bäume) als lesbare Abbildung ohne Umbruch und **Schaubilder** (SVG, siehe unten); ein **Glossar** aus
 Titel, `aliases` und `description` der Typen in `[dashboard] glossary` (Standard Konzepte und Entitäten);
 **Offene Stellen** mit allen `> ⚠️ **Widerspruch:**`, ausdrücklichen „zu prüfen“-Vermerken und `> [!todo]`
-(eingeklappt) und Sprung zur Fundstelle. Wer einen Lernpfad will, gibt den Einstiegsseiten das Schlagwort und
-`order`; Diagramme gehören als `text`-Block oder als SVG-Schaubild in die Seite (Mermaid ist nicht eingebettet).
+(eingeklappt) und Sprung zur Fundstelle. Pfade verweisen nur, jede Karte zeigt ihren eigenen Stand, und eine Freigabe des Pfads deckt nie die Karten; Format und Regeln: [Pfade](docs/konfiguration.md#pfade). `tags` gehören zum Format und wirken nur als Marke für „Zuerst lesen“ im Root-Index (`[index] entry_tag` und `order`) und als Suchbegriff; in `serve` heißen sie darum „Suchbegriffe“.
+Diagramme gehören als `text`-Block oder als SVG-Schaubild in die Seite (Mermaid ist nicht eingebettet).
 **Bewusst nicht enthalten, in keinem Wiki, nicht wieder einführen:** Themenbereiche
 und Schlagwörter erscheinen nirgends im Dashboard (keine Kachel, keine Tabellenspalte, nicht unter
 „Kategorie“ oder „Farbe“, keine Angaben oder Übersichtsseiten an der Seite), keine Übersichtskästen unter
@@ -213,7 +214,7 @@ verweisen; Lint meldet das als `visibility_leak`. Nur die öffentliche Datei wei
 
 Bilder im Wiki sind SVG-Dateien unter `<bundle>/abbildungen/<name>.svg`; sonst gibt es keine Bilder und kein Mermaid.
 `abbildung <name> --file x.svg` prüft die Datei, entfernt Skripte, Ereignis-Attribute, fremde Adressen und alles außerhalb
-einer Liste erlaubter Elemente und legt sie ab (über 200 KB, nicht UTF-8 oder ohne `viewBox`: Exit 2). Eingebunden wird sie so, mit der Unterschrift direkt darunter:
+einer Liste erlaubter Elemente und legt sie ab (über 200 KB, nicht UTF-8, ein anderer als der Standard-DOCTYPE oder ohne `viewBox` und umrechenbare `width`/`height`: Exit 2; einfache `<style>`-Regeln werden in `style`-Attribute übernommen). Eingebunden wird sie so, mit der Unterschrift direkt darunter:
 
 ```markdown
 ![Titel](/abbildungen/name.svg)
@@ -244,16 +245,16 @@ läuft trotzdem, mit der strengsten Datenklasse `personenbezogen`. Einzelheiten:
 
 ## Hooks
 
-SessionStart-Status, Guard für Rohquellen, Ereignisprotokoll, Projektionen und die Felder `status` und `verified`,
-Ereignisse und `generated` bei Write/Edit, Rebuild beim Stop mit Rückgabe der Lint-Fehler an die Sitzung. Alle vier wirken nur in Projekten mit `wiki.toml`; SessionStart und Stop
+SessionStart-Status, Guard für Rohquellen, Ereignisprotokoll, Projektionen und die Felder `status`, `verified` und `generated.modelle`,
+Ereignisse und `generated` samt Modell aus dem Transkript der Sitzung bei Write/Edit, Rebuild beim Stop mit Rückgabe der Lint-Fehler an die Sitzung. Alle vier wirken nur in Projekten mit `wiki.toml`; SessionStart und Stop
 suchen sie aufwärts ab dem Projektordner, Guard und post-edit aufwärts ab der Zieldatei.
 
 - **Als Plugin** (`claude plugin install okfw@okfw`): Die Hooks kommen mit dem Plugin
   (`hooks/hooks.json` im Plugin), im Projekt ist nichts einzutragen.
 - **Als Skill-Ordner** (`~/.claude/skills/okfw`): `hooks/settings.example.json` in die
   `.claude/settings.json` des Projekts übernehmen.
-- Bedienfehler (kaputte `wiki.toml`, `requires_core` neuer als der Kern, fehlendes `uv`) melden die Hooks als eine Zeile;
-  ohne `uv` läuft der Guard gar nicht, der Schutz ist dann aus und der Sitzungsstart nennt es einmal; Bedienfehler halten nie etwas an. Blockiert werden nur Schreibzugriffe
+- Bedienfehler (kaputte `wiki.toml`, `requires_core` neuer als der Kern, fehlendes `uv`) melden die Hooks außerhalb des Guard als eine Zeile;
+  ohne `uv` läuft der Guard gar nicht, der Schutz ist dann aus und der Sitzungsstart nennt es einmal. Der Guard sperrt bei einer `wiki.toml`, die er nicht lesen kann, das Schreiben im Projekt außer auf sie selbst. Sonst blockiert werden nur Schreibzugriffe
   auf geschützte Dateien und, höchstens zweimal je Sitzung und einmal je Abschluss, der Abschluss bei Lint-Fehlern (Befunde
   je Seite mit Regelname); danach bleibt es bei einer Zeile mit der Zahl der Fehler. Freigaben setzt auch dann nur die Person.
 - Nicht beides zugleich, sonst laufen die Hooks doppelt und das Ereignisprotokoll schreibt jede

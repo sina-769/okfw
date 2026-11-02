@@ -329,9 +329,9 @@ uv run --no-config --quiet "$K" dashboard || exit 1
 d=build/wiki-dashboard.html
 echo "Treffer nachbau-kreis (Zeichnung eingebettet): $(grep -c nachbau-kreis "$d")"
 echo "Treffer NACHBAU-SKRIPT/ONLOAD (muss 0 sein):   $(grep -ciE "NACHBAU-SKRIPT|NACHBAU-ONLOAD" "$d")"
-echo "Treffer window.okfwEdit = (serve.js, muss 0 sein): $(grep -c "window.okfwEdit = " "$d")"
+echo "Treffer Schreibschicht (serve.js, auftraege.js, muss 0 sein): $(grep -cE "window\.okfw(Edit|Serve|Auftraege) = " "$d")"
 echo "Andockpunkte okfwEdit?. in der Vorlage (dürfen stehen): $(grep -o "okfwEdit?\." "$d" | wc -l)"
-grep -q nachbau-kreis "$d" && ! grep -qiE "NACHBAU-SKRIPT|NACHBAU-ONLOAD" "$d" && ! grep -q "window.okfwEdit = " "$d"'
+grep -q nachbau-kreis "$d" && ! grep -qiE "NACHBAU-SKRIPT|NACHBAU-ONLOAD" "$d" && ! grep -qE "window\.okfw(Edit|Serve|Auftraege) = " "$d"'
 step "Karte mit {: onclick=…} und javascript:-Link: im Dashboard nur Text, kein onclick, keine Skript-Adresse, CSP mit Nonce" '
 cd "$W6" || exit 1
 uv run --no-config --quiet "$K" new concept attributprobe --title "Attributprobe" --description "Prüft, dass Attributlisten und Skript-Links nichts bewirken." >/dev/null || exit 1

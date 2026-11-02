@@ -9,7 +9,7 @@ anthropic = "https://api.anthropic.com"
 schluessel = "anthropic-api-key"
 schluessel_env = "ANTHROPIC_API_KEY"
 daten = ["oeffentlich", "intern"]
-hinweis = "Über Claude Code ohne Key: Anmeldung oder Abo. Nur direkt braucht es einen Key."
+hinweis = "Über Claude Code ohne Key: Anmeldung oder Abo. Mit OpenCode oder direkt braucht es einen Key."
 modelle = ["sonnet", "opus", "haiku"]
 
 [anbieter.openai]

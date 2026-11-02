@@ -1,40 +1,39 @@
 /* okfw serve: Bearbeiten im Dashboard. Nutzt die :root-Variablen der Vorlage; fehlt eine, greift der Rückfall. */
 .okfw-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
-.okfw-badge { font: 600 11px var(--font-mono); letter-spacing: 0.04em; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--warning); background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--ink); }
 .okfw-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; }
 .okfw-actions button, .okfw-bar button { cursor: pointer; }
 .okfw-danger { border-color: var(--warning) !important; }
 
 body.okfw-open { overflow: hidden; }
 .okfw-layer { position: fixed; inset: 0; z-index: 40; background: var(--page); color: var(--ink); overflow-y: auto; padding: 16px; }
-.okfw-box { max-width: 62rem; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px 22px; }
+.okfw-box { max-width: 62rem; margin: 0 auto; background: var(--surface); border: 0; border-radius: 22px; padding: 18px 20px 22px; }
 .okfw-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 12px; }
-.okfw-head h2 { flex: 1; min-width: 12rem; margin: 0; font-family: var(--font-heading); font-size: 20px; font-weight: 400; }
+.okfw-head h2 { flex: 1; min-width: 12rem; margin: 0; font-family: var(--font-heading); font-size: 28px; font-weight: 800; }
 .okfw-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
 .okfw-bar .sp { flex: 1; }
 .okfw-box h3 { font-size: 13px; font-weight: 600; margin: 18px 0 6px; color: var(--ink-2); }
 .okfw-box p { margin: 6px 0; }
 .okfw-note { font-size: 12px; color: var(--muted); }
+.okfw-ab-vorschau { margin: 8px 0; padding: 8px 10px; background: #FFFFFF; color: #1A1A1A; border: 1px solid var(--border); border-radius: 8px; }
+.okfw-ab-vorschau svg { display: block; width: 100%; height: 200px; }
 
 .okfw-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
 .okfw-tabs [role="tab"] { border: 0; border-bottom: 3px solid transparent; background: transparent; padding: 6px 12px; cursor: pointer; font-size: 14px; color: var(--ink-2); }
-.okfw-tabs [role="tab"][aria-selected="true"] { border-bottom-color: var(--accent); color: var(--ink); font-weight: 600; }
+.okfw-tabs [role="tab"][aria-selected="true"] { border-bottom-color: var(--ink); color: var(--ink); font-weight: 600; }
 
-.okfw-box input[type="text"], .okfw-box input[type="url"], .okfw-box select, .okfw-box textarea {
-  font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); width: 100%; box-sizing: border-box;
-  border: 1px solid color-mix(in srgb, var(--ink) 22%, transparent); border-radius: 8px; padding: 6px 8px; }
+.okfw-box input[type="text"], .okfw-box input[type="url"], .okfw-box select, .okfw-box textarea { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); width: 100%; box-sizing: border-box; border: 2px solid var(--border); border-radius: 10px; padding: 6px 8px; }
 .okfw-box textarea { font-family: var(--font-mono); line-height: 1.5; resize: vertical; }
 .okfw-box input[readonly], .okfw-box textarea[readonly] { background: var(--wash); color: var(--ink-2); }
 .okfw-text { min-height: 52vh; }
 .okfw-prop { min-height: 5.5em; }
-.okfw-box label { display: block; font-size: 12px; color: var(--ink-2); }
+.okfw-box label { display: block; margin-top: 10px; font-size: 12px; color: var(--ink-2); }
 .okfw-box label > input, .okfw-box label > select, .okfw-box label > textarea { margin-top: 3px; }
-.okfw-box label.okfw-check { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--ink); }
+.okfw-box label.okfw-check { display: flex; gap: 6px; align-items: center; margin-top: 0; font-size: 13px; color: var(--ink); }
 .okfw-box label.okfw-check input { width: auto; margin: 0; }
 .okfw-box option:disabled { color: var(--muted); }
 
 .okfw-prev { border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; min-height: 52vh; overflow-wrap: anywhere; }
-.okfw-prev h1, .okfw-prev h2, .okfw-prev h3, .okfw-prev h4 { font-family: var(--font-heading); font-weight: 400; margin: 14px 0 6px; }
+.okfw-prev h1, .okfw-prev h2, .okfw-prev h3, .okfw-prev h4 { font-family: var(--font-heading); font-weight: 700; margin: 14px 0 6px; }
 .okfw-prev code { font-family: var(--font-mono); font-size: 0.9em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
 .okfw-prev pre { background: var(--pre-bg); color: var(--pre-ink); padding: 10px 12px; border-radius: 8px; overflow-x: auto; }
 .okfw-prev pre code { background: none; padding: 0; }
@@ -76,8 +75,9 @@ body.okfw-open { overflow: hidden; }
 .okfw-card h4 { margin: 0 0 4px; font-size: 14px; }
 .okfw-cmd { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; }
 .okfw-cmd code { flex: 1; font: 12px var(--font-mono); background: var(--code-bg); padding: 8px 10px; border-radius: 6px; overflow-wrap: anywhere; }
-.okfw-vars td.sw { width: 3rem; }
-.okfw-vars .sw span { display: inline-block; width: 1.2rem; height: 1.2rem; border-radius: 4px; border: 1px solid var(--border); vertical-align: middle; }
+.okfw-vars td.sw { min-width: 10rem; }
+.okfw-vars .sw .okfw-note { overflow-wrap: anywhere; }
+.okfw-vars .sw span:not(.okfw-note) { display: inline-block; width: 1.2rem; height: 1.2rem; border-radius: 4px; border: 1px solid var(--border); vertical-align: middle; }
 
 .okfw-toast { position: fixed; z-index: 60; left: 50%; bottom: 16px; transform: translateX(-50%); width: min(40rem, calc(100vw - 24px)); display: grid; gap: 8px; }
 .okfw-toast > div { background: var(--surface); color: var(--ink); border: 1px solid var(--ink); border-radius: 10px; padding: 10px 14px; box-shadow: 0 10px 30px var(--shadow); font-size: 13px; display: flex; gap: 10px; align-items: flex-start; }
@@ -86,3 +86,24 @@ body.okfw-open { overflow: hidden; }
 .okfw-frage { max-width: min(34rem, calc(100vw - 32px)); background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
 .okfw-frage::backdrop { background: color-mix(in srgb, var(--ink) 35%, transparent); }
 .okfw-frage p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.okfw-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.okfw-box-breit { max-width: 78rem; }
+.okfw-pfad-teile { display: grid; grid-template-columns: minmax(13rem, 18rem) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 800px) { .okfw-pfad-teile { grid-template-columns: minmax(0, 1fr); } }
+.okfw-stationen { list-style: none; margin: 0 0 8px; padding: 0; }
+.okfw-st { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; justify-content: space-between; padding: 4px 6px; border: 1px solid var(--border); border-radius: 8px; margin: 4px 0; }
+.okfw-st.an { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.okfw-st > button { flex: 1; min-width: 0; text-align: left; overflow-wrap: anywhere; text-decoration: none; }
+.okfw-st-tun { display: inline-flex; gap: 2px; }
+.okfw-st-tun button { padding: 2px 7px; }
+.okfw-station { display: grid; gap: 10px; min-width: 0; }
+.okfw-raster { display: grid; grid-template-columns: repeat(var(--spalten, 12), minmax(0, 1fr)); grid-template-rows: repeat(var(--zeilen, 9), 40px); grid-auto-rows: 40px; gap: 6px;
+  padding: 6px; border: 1px dashed var(--edge); border-radius: 8px; overflow: auto; touch-action: none;
+  background-image: linear-gradient(to right, var(--grid) 1px, transparent 1px); background-size: calc(100% / var(--spalten, 12)) 100%; }
+.okfw-el { position: relative; border-radius: 8px; padding: 6px 8px; font-size: 12px; overflow: hidden; cursor: grab; background: var(--surface); border: 1px solid var(--edge-hi); user-select: none; overflow-wrap: anywhere; }
+.okfw-el.text { border-style: dashed; border-color: var(--edge); background: var(--wash); }
+.okfw-el.an, .okfw-el:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.okfw-el:active { cursor: grabbing; }
+.okfw-griff { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, var(--edge-hi) 50%); }

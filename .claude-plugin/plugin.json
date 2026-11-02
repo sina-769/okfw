@@ -1,7 +1,7 @@
 {
   "name": "okfw",
-  "version": "0.6.1",
-  "description": "Wissens-Wikis im Open Knowledge Format v0.2 nach dem pi-llm-wiki-Muster: Quellen unveränderlich erfassen, Karten mit Belegpflicht anlegen, Indexe und Log generieren, Lint, Prüfvermerke, Lizenz- und Nutzungsrechte je Quelle, APA/CSL/RIS-Export und ein HTML-Dashboard (Netz, Lernpfad, Glossar, offene Stellen, Leseansicht), lokal mit Bearbeiten, Freigabe und Einstellungen. Dazu Literaturrecherche über offizielle APIs, Lesen von Quellen mit Gegenprüfung, Webabruf im Container und Modellrollen (Harness, Anbieter, Modell je Arbeit). Skills plus Hooks (Status, Schreibschutz, Ereignisprotokoll, Rebuild); braucht uv, der Webabruf eine Docker-Laufzeit.",
+  "version": "0.7.0",
+  "description": "Wissens-Wikis im Open Knowledge Format v0.2 nach dem pi-llm-wiki-Muster: Quellen unveränderlich erfassen, Karten mit Belegpflicht anlegen, Indexe und Log generieren, Lint, Prüfvermerke, Lizenz- und Nutzungsrechte je Quelle, APA/CSL/RIS-Export und ein HTML-Dashboard (Netz, Pfade, Glossar, offene Stellen, Leseansicht), lokal mit Bearbeiten, Freigabe und Einstellungen. Dazu Literaturrecherche über offizielle APIs, Lesen von Quellen mit Gegenprüfung, Webabruf im Container und Modellrollen (Harness, Anbieter, Modell je Arbeit). Skills plus Hooks (Status, Schreibschutz, Ereignisprotokoll, Rebuild); braucht uv, der Webabruf eine Docker-Laufzeit.",
   "author": {
     "name": "sina-769",
     "url": "https://github.com/sina-769"

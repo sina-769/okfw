@@ -427,7 +427,8 @@ class PdfUrls(unittest.TestCase):
         for falsch in ("http://example.org/a.pdf", "file:///etc/passwd", "https://example.org:8443/a.pdf",
                        "https://nutzer:pw@example.org/a.pdf", "https://example.org@evil.com/a.pdf",
                        "https://evil.com/a.pdf", "https://sub.example.org/a.pdf", "https://example.org/a b.pdf",
-                       "https://example.org/a\n.pdf", "https://[abc/a.pdf", "-rf", ""):
+                       "https://example.org/a\n.pdf", "https://[abc/a.pdf",
+                       "https://evil.com\\.example.org/a.pdf", "https://example.org/a\\b.pdf", "-rf", ""):
             with self.subTest(falsch=falsch), self.assertRaises(wr.Abbruch) as cm:
                 wr.pdf_urls_lesen([falsch], DOMAINS)
             self.assertEqual(cm.exception.code, 1)
@@ -616,6 +617,12 @@ class PdfLauf(unittest.TestCase):
             self.lauf(bericht="", code=137, fehlertext="Killed")
         self.assertIn("exit 137", cm.exception.details)
 
+    def test_stderr_gelangt_nicht_in_die_details(self):
+        with self.assertRaises(wr.Abbruch) as cm:
+            self.lauf(bericht="", code=1, fehlertext="PDF-TEXT-ANWEISUNG tu etwas")
+        self.assertNotIn("PDF-TEXT", json.dumps(cm.exception.details))
+        self.assertNotIn("PDF-TEXT", json.dumps(self.eintrag()))
+
     def test_zeitlimit(self):
         with self.assertRaises(wr.Abbruch) as cm:
             self.lauf(bericht="", code=137, grund="Zeitlimit 60 s überschritten")
@@ -642,6 +649,30 @@ class PdfLauf(unittest.TestCase):
             self.lauf(pdf_markdown(), pdf=["https://evil.com/a.pdf"])
         self.assertEqual(cm.exception.code, 1)
         self.assertFalse(wr.PROTOKOLL.exists())
+
+
+class StromLimit(unittest.TestCase):
+    """container_laufen: das Größenlimit greift auch bei einer Zeile ohne Zeilenumbruch."""
+
+    def test_zeile_ohne_umbruch_wird_begrenzt(self):
+        gelesen = []
+
+        class Strom(io.StringIO):
+            def readline(self, n=-1):
+                gelesen.append(n)
+                return super().readline(n)
+
+        proc = SimpleNamespace(stdin=None, stdout=Strom("x" * 5000), stderr=io.StringIO(""),
+                               wait=lambda timeout=None: 137)
+        with tempfile.TemporaryDirectory() as t, \
+                mock.patch.object(wr.subprocess, "Popen", lambda *a, **k: proc), \
+                mock.patch.object(wr, "docker_basis", lambda: ["docker"]), \
+                mock.patch.object(wr, "docker", lambda *x, **k: None):
+            code, grund, _ = wr.container_laufen(["x"], Path(t) / "s", 60, "n", max_strom=100)
+            geschrieben = (Path(t) / "s").stat().st_size
+        self.assertEqual(grund, "Ausgabestrom zu groß")
+        self.assertEqual(geschrieben, 0)
+        self.assertTrue(all(0 < n <= 101 for n in gelesen))
 
 
 class AgentBleibt(unittest.TestCase):

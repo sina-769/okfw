@@ -40,6 +40,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -895,4 +896,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    # Abbruch aus dem Dashboard: als Ausnahme, damit Arbeitsordner, Kindprozess und Protokoll sauber enden
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     sys.exit(main())

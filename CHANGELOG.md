@@ -2,6 +2,74 @@
 
 Je Version steht hier nur das Ergebnis der Prüfungen. Protokolle und Berichte hängen als Anhang am Release, die aus der Zeit vor 0.6.0 gesammelt an 0.6.0.
 
+## 0.7.0 · 2.11.2026
+
+Im Dashboard arbeiten: Quellen hineinkippen, Pfade und Vortrag, Modellaufträge im Hintergrund, Schaubilder, Ablösen und Löschen, neue Gestaltung.
+
+Geprüft: Nachbau mit echter Claude-Sitzung, volle Prüfung des Kerns, Selbstreview über 0.7.0, Diff seit 0.6.1. Nicht geprüft: echtes Safari und Telefon, Ziehen aus dem Finder von Hand, der
+Druckdialog des Systems, Linux mit `bwrap`. Der Bericht hängt am Release.
+
+- **Quellen hineinkippen in `serve`.** PDF oder Markdown auf „Neue Karte“ ziehen oder eine DOI oder einen Link eingeben. Die Rechte werden wie in `/lesen` geklärt; ohne erlaubte
+  KI-Auswertung bleibt „Nur Karte ohne Modell“. PDFs liest `pdftotext` in der Sandbox des Systems ohne Netz und ohne Benutzerordner, ohne Sandbox wird nichts gelesen. Das Modell schlägt Quellenkarte und
+  Konzeptkarten mit Fundstellen und Ankern vor; der Kern übernimmt nur bekannte Felder als reinen Text und prüft jeden Anker am Original. Angenommenes landet als Entwurf. Neu: Auftragstyp `quelle`,
+  Änderungsarten `quelle` und `seite`, Routen `/api/quelle/datei`, `/api/quelle/klaeren`, `/api/quelle/karte`.
+- **In den Testordnern liegen keine Berichte mehr:** Ein Test lehnt in `tests/` jede `.md` außer `angreifer.md` und `selbstreview.md` ab und unter `web-zugriff/scripts/tests/` jede, auch git-ignorierte.
+- **Die README ist kurz.** Sie zeigt drei Bilder, Installation und den Einstieg. Alle Funktionen mit Bildern stehen in `docs/rundgang.md`, Voraussetzungen, Tests, Nachbau und Release in `docs/entwicklung.md`.
+- **Das Dashboard hat eine neue Grundgestaltung, „Streckennetz“.** Der Kopf ist ein Schild, Pfade sind Linien mit Haltestellen, im Vortrag
+  wird die Akzentfarbe zum Plakat, und eine Karte liest sich in einer Antiqua. Die Farben bleiben, neu sind die Schriften Bricolage Grotesque,
+  Instrument Sans und Newsreader statt IBM Plex. Hell, dunkel und am Telefon; alles bleibt über `design.css` und den Reiter Design änderbar.
+  Wer in einer eigenen `design.css` auf IBM Plex gesetzt hat, bekommt die Ersatzschrift und bettet die Schrift dort selbst ein.
+- **Bewegung nur mit CSS.** Übergänge zwischen Stationen und sanfte Einblendungen; `prefers-reduced-motion` schaltet sie ab, auch das Aufblitzen
+  beim Sprung zu einer offenen Stelle, das diese Einstellung bisher überging.
+- **Automatische Lage folgt der Reihenfolge der Station.** Text rutscht nicht mehr unter die Karten, Karten mit Titel und Beschreibung lassen im
+  Vortrag keine leere Fläche, und eine Karte wiederholt den Titel ihrer Station nicht.
+- **`design.css` darf `scroll-behavior` und `overscroll-behavior` enthalten.** Die Prüfung lehnte sie irrtümlich wie `behavior:` ab.
+- **Schaubild aus einer Beschreibung.** Der Dialog „Abbildung einfügen“ lässt ein Modell ein SVG entwerfen. Hinaus geht nur die Beschreibung, das SVG durchläuft dieselbe Bereinigung wie ein
+  hochgeladenes, abgelegt wird es erst beim Annehmen, und ein vorhandenes Bild ersetzt dieser Weg nie. Das Ereignis nennt das Modell (`abbildung --rolle R --modell M`), die Bildunterschrift sagt
+  „Mit KI erzeugt“. Neuer Lint-Code `figure_generated`, wenn sie das nicht sagt.
+- **Modellaufrufe laufen in `serve` als Aufträge im Hintergrund.** „Vorschlag holen“ blockiert die Seite nicht mehr, übersteht ein Neuladen und lässt sich abbrechen, samt
+  Kindprozessen; je Rolle läuft ein Auftrag zugleich. Der Vorschlag liegt als Datei unter `<bundle>/.auftraege/`, außerhalb von Commit, Lint und Export, und behält seine
+  Modellherkunft über einen Neustart. „Annehmen“ speichert jetzt direkt, „Ins Textfeld“ tut, was „Annehmen“ bisher tat. Unter „Aufträge“ stehen alle offenen. `POST /api/vorschlag`
+  entfällt; an seine Stelle treten `/api/auftrag`, `/api/auftrag/abbrechen`, `/api/auftraege`, `/api/vorschlag/annehmen` und `/api/vorschlag/verwerfen`.
+- **Pfade ersetzen den Lernpfad im Dashboard.** Ein Pfad (`type: pfad` in `pfade/`, in jedem Wiki) hat Stationen mit mehreren Karten und eigenem Text auf einem Raster mit
+  12 Spalten. Das Dashboard hat nur noch den Abschnitt „Pfade“: „Lesen“ untereinander, „Vortrag starten“ im festen Bild 16:9 mit Vollbild, Tastatur, Sprechernotizen und
+  Druck je Station; beides folgt dem Umschalter „Umfang“. Der Abschnitt „Lernpfad“, „Lernpfad starten“ und „Lernpfad · Schritt N von M“ in der Leseansicht entfallen. `serve`
+  bearbeitet Stationen, Lage und Text, auch mit der Tastatur, mit Hash und Ereignis. `pfad export` schreibt eine Datei mit nur den Karten des Pfads; `--oeffentlich` stoppt bei
+  fehlenden, abgelösten und internen Karten, `--notizen` nie zusammen damit. Karten werden nur verwiesen und zeigen ihren eigenen Stand; eigener Text ist immer als solcher
+  gekennzeichnet. Neue Lint-Codes `pfad_*`. Karten mit Schlagwort und `order` liefern weiter „Zuerst lesen“ im Root-Index und erscheinen als Pfad „Zuerst lesen“; erst
+  „Bearbeiten“ oder `pfad uebernehmen` legt die Datei an.
+- **`tags` heißen in `serve` „Suchbegriffe“:** Das Feld bleibt im OKF-Format, wirkt in okfw aber nur als Marke für „Zuerst lesen“ im Root-Index und in der Suche. Die
+  Eigenschaften zeigen es als Eingabe mit Kommas; `order` steht nur noch in der Textansicht des Frontmatters.
+- **SVGs lassen sich im Dashboard wirklich einfügen:** Der Standardkopf `<!DOCTYPE svg PUBLIC …>` aus Illustrator oder Graphviz wird übergangen, `width` und
+  `height` mit absoluter Einheit (`10mm`, `72pt`) ergeben das `viewBox`. Einfache `<style>`-Regeln samt `class` wandern in `style`-Attribute, bisher blieb so
+  eine Datei schwarz. `<switch>` aus draw.io behält den Ersatztext. Der Dialog prüft zuerst, zeigt die bereinigte Fassung und was entfällt, und fragt bei einem
+  vorhandenen Namen: ersetzen (mit den Seiten, die sie zeigen) oder unter einem freien Namen ablegen. Eine Datei, die nicht UTF-8 ist, meldet er, statt
+  Umlaute still zu ersetzen.
+- **Freigeben ohne Gegenprüfung im Dashboard:** Fehlt die Gegenprüfung zum jetzigen Inhalt, fragt das Dashboard je Seite nach, statt
+  abzulehnen; „Trotzdem freigeben“ gibt frei wie `verify --force`. Ohne diese Antwort gibt der Server nichts frei. Das Ereignis vermerkt
+  „freigegeben ohne Gegenprüfung“, die Karte trägt eine Marke, der Lint meldet `human_without_check`. Die Meldungen nennen jetzt, was fehlt
+  und was sich tun lässt. Das Feld „Bearbeiten“ in der Seitenleiste ist weg, der Knopf an der Karte bleibt.
+- **Karten ablösen und löschen:** `deprecate` setzt `status: deprecated` und auf Wunsch `superseded_by`; `delete` zeigt die Folgen (Belege, Fußnoten,
+  Links, Rohquelle) und legt die abgelöste Karte erst mit `--yes --by human:<id>` in den Papierkorb `<bundle>/.papierkorb/`; `restore` holt sie zurück.
+  Belege sperren bis `--belege-brechen`, die Rohquelle bleibt ohne `--mit-rohquelle` liegen. Dasselbe im Dashboard mit Rückfrage und Reiter „Papierkorb“; abgelöste Karten lassen sich dort nicht freigeben.
+  Neue Lint-Regel `superseded_missing` (Warnung). Der Guard-Hook sperrt den Papierkorb für Edit und Write.
+- **Modellherkunft bleibt am Text:** `generated.modelle` im Frontmatter nennt je Modell Harness, Anbieter, Modell, Rolle, Art, den
+  Menschen oder Akteur, der den Text eingebracht hat, Zeitpunkt und Prüfwert. Der Block überlebt Übernehmen, Freigeben, Export und
+  späteres Bearbeiten und wird nur länger. `generated.by` und `verified` sagen weiter, wer zuletzt geändert und wer freigegeben
+  hat. Bisher stand nach dem Übernehmen eines Vorschlags nur `human:<kennung>` im Frontmatter, das Modell nur im
+  Ereignisprotokoll. Das Dashboard zeigt die Herkunft sichtbar (Marke, Zeile über dem Text, Kopfzeile) und führt sie in seinen
+  Daten, die öffentliche Ausgabe ohne Kennung einer Person. Ob das eine gesetzliche Kennzeichnungspflicht erfüllt, ist nicht geprüft.
+- **`body --rolle <rolle> [--modell M]`:** vermerkt, dass der Text auf dem Entwurf einer Rolle beruht; `/lesen` nutzt das.
+- **Standard-Akteur nennt kein erfundenes Modell mehr:** `init` schreibt `claude-code/unknown` statt `claude-code/claude-opus-5-5`.
+  In Claude Code liest der Hook das Modell aus dem Transkript der Sitzung, für Subagenten aus deren Transkript; das gilt auch für
+  einen fest eingetragenen `claude-code/…` oder `human:…`, denn diesen Schreibzugriff hat die Sitzung gemacht. Ein gesetztes `WIKI_ACTOR` und andere Akteure bleiben. Bestehende `wiki.toml` ändern
+  sich nicht.
+- **Neue Lint-Warnungen:** `modell_unbekannt`, `modelle_invalid`, `modell_herkunft_fehlt` (im Ereignisprotokoll vermerkt, im Frontmatter
+  entfernt). Der Guard lehnt Write und Edit ab, die `generated.modelle` ändern.
+- **Kern zerlegt, ohne neues Verhalten:** `okfw.py` bleibt Eingang und Namensraum (Aufruf, Inline-Metadaten, `okfw.<name>`), der Code liegt
+  nach Aufgaben in `okfw_kern/`. SVG und CSS (`bereinigung`), YAML und Frontmatter (`frontmatter`) und die öffentliche Ansicht
+  (`wiki_sicht`) lassen sich einzeln prüfen. Die Klasse `Wiki` setzt sich aus Teilen zusammen; alle Methoden bleiben an ihr.
+
 ## 0.6.1 · 2.11.2026
 
 Aufräumen, Kern, Hooks und Profile bleiben wie in 0.6.0.

@@ -6,17 +6,19 @@
 ~/.claude/skills/okfw/
 ├── SKILL.md                  Arbeitsweise für Claude (Recall → Capture → Ingest → Retro → Lint)
 ├── okfw.py                   Kern: PEP 723 (Python ≥ 3.11, PyYAML und Markdown über uv), CLI und Bibliothek
+├── okfw_kern/                 Code des Kerns nach Aufgaben: basis, frontmatter, bereinigung, rechte, konfig, quellen, wiki*, cli
 ├── rollen.py                 Modellrollen (Harness, Anbieter, Modell je Arbeit), nur Standardbibliothek, siehe „Modellrollen“
 ├── anbieter.toml             Anbieter und Rollen ab Werk (unterste Schicht der Modellrollen)
 ├── okfw_serve.py             lokaler Server hinter `okfw.py serve` (Bearbeiten im Dashboard), nur Standardbibliothek
+├── okfw_auftraege.py, okfw_quelle.py   Aufträge im Hintergrund von `serve`; Quellen ablegen, abgeschottet auslesen, Anker prüfen
 ├── hooks/okf_hook.py         Guard und Ereignisprotokoll für Claude Code, nur Standardbibliothek
 ├── hooks/settings.example.json   Hook-Block für .claude/settings.json eines Projekts
 ├── profiles/default.toml     Grundprofil für neue Wikis (okfw.py init)
 ├── profiles/dokumentation.toml   Profil für Wikis über Projektdoku und Code (init --profile dokumentation)
 ├── profiles/…                weitere fertige wiki.toml je Installation (nicht im Plugin)
 ├── templates/dashboard.html  Vorlage des HTML-Dashboards (okfw.py dashboard)
-├── templates/serve.js, serve.css   Bearbeiten im Dashboard; nur `serve` fügt sie ein, nie die Dashboard-Datei
-├── templates/fonts/          IBM Plex Serif/Sans, JetBrains Mono (SIL OFL 1.1, Lizenztexte dabei), werden eingebettet
+├── templates/serve.js, auftraege.js, auftrag_*.js, serve.css, auftraege.css   Bearbeiten im Dashboard; nur `serve` fügt sie ein, nie die Dashboard-Datei
+├── templates/fonts/          Bricolage Grotesque, Instrument Sans, Newsreader, JetBrains Mono (SIL OFL 1.1, Lizenztexte dabei), werden eingebettet
 ├── templates/apa.csl         Zitierstil APA 7 (Zotero, CC BY-SA 3.0), Standard für Literaturangaben
 ├── docs/konfiguration.md     diese Datei
 ├── local.example.md          Vorlage für local.md
@@ -38,7 +40,7 @@ beschrieben in der `CLAUDE.md` des Projekts).
 
 Aufs Netz greift der Kern nur in Befehlen zu, die dafür da sind (`new source --doi/--pmid/--arxiv`:
 Crossref, sonst DataCite, PubMed, arXiv, dazu bei DOI und PMID die Rückzugsprüfung bei Crossref und PubMed; `lizenz --fetch`: Crossref oder DataCite, Europe PMC,
-OpenAlex), nie bei `lint`, `rebuild`, `status` oder `dashboard`. `serve` geht nur über `rollen.py` ins Netz (Modellliste, Vorschlag) und nur auf Klick. Ohne `wiki.toml` schreibt er
+OpenAlex), nie bei `lint`, `rebuild`, `status` oder `dashboard`. `serve` geht nur auf Klick ins Netz: über `rollen.py` (Modellliste, Vorschlag) und beim Aufnehmen einer DOI oder Kennung über dieselben Metadatendienste wie `new source` und `lizenz --fetch`, für freien Text auch über Europe PMC und die Skripte von `recherche`. Ohne `wiki.toml` schreibt er
 nichts; `status --hook`, `rebuild --hook` und `rebuild --quiet` beenden sich dann still, damit Hooks in
 fremden Ordnern nicht stören. Andere Bedienfehler (kaputte `wiki.toml`, ein bekannter Abschnitt, der keine Tabelle ist, `requires_core` zu neu)
 melden `status --hook` und `rebuild --hook` als eine Zeile (`systemMessage`, Exit 0).
@@ -61,23 +63,27 @@ Rückzugsprüfung einen Rückzug oder Bedenken meldet (dann entsteht keine Karte
 | Befehl | Zweck |
 |---|---|
 | `status [--hook]` | Seiten je Typ, draft, veraltet (`stale_after` erreicht), offene `[!todo]` (ohne Code), Vertrauensstufen, gültige und verfallene Freigaben (davon „stable, seit Änderung ungeprüft“) und Seiten „zur Freigabe“, Seiten mit Gegenprüfung ohne Prüfwert, Rohquellen ohne Karte, Umfang, bei `[visibility] field` die Zahl verborgener Seiten, Fundweg, Zahl der Ereignisse und Zeitpunkt des letzten; `--hook` gibt SessionStart-JSON aus |
-| `lint [--strict] [--json] [--summary]` | OKF-Konformität und Profilregeln; Exit 1 bei Fehlern (mit `--strict` auch bei Warnungen) |
+| `lint [--strict] [--json] [--summary]` (`--streng` wie `--strict`) | OKF-Konformität und Profilregeln; Exit 1 bei Fehlern (mit `--strict` auch bei Warnungen) |
 | `rebuild [--check] [--quiet \| --hook [--befunde]]` (Alias `index`) | `index.md` je Ordner, `log.md`, Exporte; `--check` schreibt nichts und endet mit Exit 1, wenn etwas veraltet ist; `--hook` erzeugt still neu und meldet Lint-Fehler als eine Zeile (`systemMessage`), ohne zu blockieren; `--befunde` gibt sie zusätzlich je Seite im JSON aus, für `okf_hook.py stop`, das daraus die Rückgabe an die Sitzung baut |
 | `new <typ> <slug> --title … [--description] [--sources a,b] [--tags] [--access] [--resource] [--csl DATEI\|-] [--set feld=wert] [--fundweg ART --db --query --fundweg-von SLUG --at ZEIT --by AKTEUR]` | Seite aus Vorlage, `generated` gesetzt, `stale_after` nur bei Typen mit `stale_months`, Quellen mit `license: unknown` (mit `--set raw_packet=…` die Lizenz aus dessen `manifest.json`, `via: capture`) und auf Wunsch `fundweg` (`--at`/`--by` für den echten Suchzeitpunkt und -akteur, sonst jetzt und `[wiki] actor`; beide nur mit `--fundweg`), Ereignis `create`. Deutsche Optionen `--titel`, `--beschreibung`, `--quellen` |
 | `new source <slug>` bzw. `new-source <slug>` mit `--doi` · `--pmid` · `--arxiv` · `--manuell --titel … --url … [--autor] [--jahr] [--csl-typ]` · `--aus-lauf LAUF --kandidat N`, dazu `[--volltext PFAD --von URL] [--evidenz E] [--trotz-rueckzug]` | Quellenkarte mit Metadaten aus Crossref (DOIs, die Crossref nicht kennt: DataCite), PubMed oder arXiv (CSL, Kurzbeleg, APA-Block); setzt `[sources] checked_field` (`{by, at}` mit dem Dienst, der geantwortet hat: `process:crossref`, `process:datacite`, `process:pubmed` oder `process:arxiv`) und bei jedem `updated-by`-Hinweis von Crossref (Rückzug, Bedenken, Korrektur) `[sources] updates_field`; `access` ohne Angabe `citation`, bei `--manuell` `originaldokument`, wenn das Profil ihn kennt. Bei `--doi` und `--pmid` prüft der Kern vor dem Schreiben den Rückzugsstatus (Exit 3 und keine Karte bei Rückzug oder Bedenken; `--trotz-rueckzug` legt sie mit Vermerk an) und schreibt `[sources] retraction_field` (siehe [Rückzugsprüfung](#rückzugsprüfung)). `--aus-lauf LAUF --kandidat N` (Nr, DOI oder PMID) liest `LAUF/kandidaten.json` der Recherche (`api.py zusammenfuehren`): Kennung des Kandidaten statt `--doi`/`--pmid`/`--arxiv`, dazu je Fund ein Fundweg mit echtem Zeitpunkt, `db`, `query` und `by` (ein Fund als Zuordnung, mehrere als Liste); ein reiner Websuche-Treffer ohne Auflösung über Weg 1 oder 2 wird abgelehnt. Wird zugleich eine eigene Kennung angegeben, vergleicht der Kern sie mit der des Kandidaten: eine andere Arbeit ist ein Bedienfehler (Exit 2, nichts übernommen), ohne gemeinsame Kennung steht auf stderr „Zuordnung nicht geprüft“ |
 | `fundweg <seite> --art … [--db] [--query] [--von] [--at] [--by] [--add]` · `fundweg <seite> --aus-lauf LAUF --kandidat N [--add]` | Fundweg einer Quelle setzen; `--add` hängt einen weiteren an; `--at`/`--by` für Nachträge mit dem echten Zeitpunkt; zieht `generated` nach. `--aus-lauf` setzt statt `--art` alle Funde des Kandidaten aus `LAUF/kandidaten.json` (Zeitpunkt, `db`, `query`, `by` aus dem Lauf) in einem Schreibvorgang: Art `suche`; ein Fund, dessen `weg` selbst eine Fundweg-Art ist (`modellvorschlag`, `person`, `material`, `zitatverfolgung`), behält sie, und `zitatverfolgung` braucht `von`. Vorher vergleicht der Kern die Kennungen des Kandidaten mit denen der Karte: eine andere Arbeit ist ein Bedienfehler (Exit 2, nichts übernommen), ohne gemeinsame Kennung steht auf stderr „Zuordnung nicht geprüft“. `--add` hängt einen Fundweg, der schon dasteht, nicht noch einmal an. Auf einer Seite, die keine Quellenkarte ist, Bedienfehler (Exit 2) wie `new --doi` |
-| `abbildung <name> --file x.svg [--ersetzen]` | SVG-Schaubild prüfen, bereinigen und als `<bundle>/abbildungen/<name>.svg` ablegen, Ereignis `create` (bei `--ersetzen` `update`); mehr als 200 KB, nicht UTF-8, `<!DOCTYPE`/`<!ENTITY`, ungültiges XML, weder `viewBox` noch `width` und `height` als Zahlen, ein Symlink als Ziel oder ein Ordner `abbildungen/` außerhalb des Bundles → Exit 2; Entferntes steht auf stderr (siehe [Schaubilder](#schaubilder)) |
+| `abbildung <name> --file x.svg [--ersetzen] [--rolle R [--modell M]]` | SVG-Schaubild prüfen, bereinigen und als `<bundle>/abbildungen/<name>.svg` ablegen, Ereignis `create` (bei `--ersetzen` `update`), mit `--rolle` nennt es das Modell; mehr als 200 KB, nicht UTF-8, `<!ENTITY` oder ein `<!DOCTYPE` außer dem Standardkopf, ungültiges XML, weder `viewBox` noch `width` und `height` als Zahlen mit absoluter Einheit, ein Symlink als Ziel oder ein Ordner `abbildungen/` außerhalb des Bundles → Exit 2; Entferntes steht auf stderr, im Dashboard fragt der Dialog vorher (siehe [Schaubilder](#schaubilder)) |
 | `capture <slug> --url … --file PFAD[=REPO-PFAD] … [--source-path] [--commit] [--license … --license-url …] [--note]` | Rohquellen-Paket mit Manifest (SHA-256, 0444); Symlinks werden abgelehnt. `--file` mehrfach, je Datei mit ihrem Pfad im Quell-Repository (`--file /tmp/x/hooks.json=hooks/hooks.json`); `--source-path` gilt für Dateien ohne eigenen. `--commit` warnt, wenn es kein voller SHA ist. Prüft vorher „Volltext lokal ablegen“ für die Lizenz aus `--license`/`--license-url`: nicht erlaubt → Abbruch, erst fragen oder Auflage → Warnung (ohne `--license` gilt die Lizenz als unbekannt) |
 | `hash <pfad> [--from URL]` (Alias `sha`) | `fulltext`-Block für Karten ohne Rohquellen-Paket |
 | `verify <seite> [<seite> …] --by human:<id> [--status STATUS] [--note] [--force]` | Prüfvermerk nach OKF §5.2 mit Prüfwert des Seitenkörpers (`body_sha256`, siehe [Freigabe](#freigabe-über-claude)) für eine oder mehrere Seiten (eine Charge), `--note` für alle, ein Ereignis je Seite; ändert nur `verified` und `status`, alles andere bleibt byte-genau. `--status` nimmt `draft` und `deprecated` mit jedem Akteur, `stable` nur mit einem `human:`-Akteur und nur, wenn jede Seite eine Gegenprüfung durch Claude oder einen Prozess (Akteur ohne `human:`) mit Prüfwert zum jetzigen Inhalt hat; sonst Abbruch ohne Änderung, `--force` gibt trotzdem frei und vermerkt das im Ereignis |
 | `event <ereignisart> <seite> [detail] [--by]` | Ereignis anhängen |
-| `body <seite> <datei\|-> [--detail TEXT]` · `body <seite> --nachziehen [--neu] [--detail TEXT]` | Körper ersetzen; im Frontmatter ändert sich nur `generated {by, at}`, auf einer stable-Seite ohne gültige Freigabe (auch ohne jede Freigabe) dazu `status: draft` (`[trust] edit_resets_stable`; `verified` bleibt stehen, das Ereignis nennt die verfallene Freigabe). `--detail` ist der Text des Ereignisses. Gleicher Inhalt (gleicher Prüfwert) ändert nichts. `--nachziehen`: der Körper ist schon geändert (Edit oder Write, ruft der PostToolUse-Hook auf), nur `generated` und `status` wie eben; `--neu` (Write einer neuen Seite) schreibt das Ereignis `create` statt `update` |
+| `deprecate <seite> --by AKTEUR [--nachfolger SEITE] [--note N]` | Erste Stufe, siehe [Karten ablösen und löschen](#karten-ablösen-und-löschen): `status: deprecated`, mit `--nachfolger` dazu `superseded_by`, Ereignis `deprecate`. Die Karte bleibt |
+| `delete <seite> [--yes --by human:<id>] [--belege-brechen] [--mit-rohquelle] [--json]` | Zweite Stufe: Ohne `--yes` nur die Folgen zeigen; mit `--yes` die abgelöste Karte in den Papierkorb, Ereignis `delete`, Indexe neu |
+| `restore [<eintrag> --by AKTEUR] [--json]` | Ohne Eintrag den Papierkorb zeigen; mit Eintrag zurückholen, Ereignis `restore`, Indexe neu |
+| `body <seite> <datei\|-> [--detail TEXT] [--rolle R [--modell M]]` · `body <seite> --nachziehen [--neu] [--detail TEXT]` | Körper ersetzen; im Frontmatter ändert sich nur `generated {by, at}`, auf einer stable-Seite ohne gültige Freigabe (auch ohne jede Freigabe) dazu `status: draft` (`[trust] edit_resets_stable`; `verified` bleibt stehen, das Ereignis nennt die verfallene Freigabe). `--detail` ist der Text des Ereignisses. Gleicher Inhalt (gleicher Prüfwert) ändert nichts. `--nachziehen`: der Körper ist schon geändert (Edit oder Write, ruft der PostToolUse-Hook auf), nur `generated` und `status` wie eben; `--neu` (Write einer neuen Seite) schreibt das Ereignis `create` statt `update` |
 | `sources <seite> [--add a,b] [--remove c]` (Alias `quellen`) | `sources[]` chirurgisch ergänzen oder kürzen, zieht `generated` nach und gibt die Fußnotenzeilen für den Text aus. `--add ID=SLUG` legt eine weitere Fußnote auf dieselbe Karte an (eigene Fundstelle). `--remove` nur, wenn der Text `[^id]` nicht mehr zitiert |
 | `init [--profile NAME]` | `wiki.toml` aus `profiles/NAME.toml`, Ordner, erstes Ereignis |
 | `gitattributes` | `merge=union` für Ereignisstrom und Projektionen in `.gitattributes` eines bestehenden Wikis eintragen; wiederholbar |
 | `rechte [<seite>] [--aktion A] [--json]` (Alias `rights`) | Lizenzen und Nutzungsrechte: Übersicht je Lizenzklasse, eine Quelle im Detail oder alle Quellen nach einem Recht gruppiert (`--aktion abbildung`) |
 | `lizenz <seite> --name … [--url] [--class] [--via]` · `lizenz <seite> --fetch [--force]` · `lizenz --missing --fetch [--dry-run]` (Alias `license`) | Lizenz setzen oder suchen (DOI, PMID, PMCID): Crossref bzw. DataCite, Europe PMC, OpenAlex (je Fundort, Verlagsfassung zuerst; `via` nennt Dienst und Fassung); schreibt `license {name, url, checked, via}` chirurgisch, zieht `generated` nach und protokolliert; `--fetch` und `--missing --fetch` überschreiben nur Lizenzen ohne Namen oder mit `unknown` (und Gleichwertigem), eine benannte Lizenz, auch eine nicht eingeordnete, nur mit `--force` (`--missing` nennt am Ende, wie viele es übersprungen hat); `--dry-run` gilt für jede Form und zeigt, was geschrieben würde |
-| `dashboard [--out PFAD] [--oeffentlich] [--open]` | eine HTML-Datei mit Netz, Kennzahlen, Struktur, Lernpfad, Glossar, offenen Stellen, „Zur Freigabe“ und Tabelle; `--oeffentlich` (Alias `--public`) ohne verborgene Seiten aus `[visibility]` |
+| `dashboard [--out PFAD] [--oeffentlich] [--open]` | eine HTML-Datei mit Netz, Kennzahlen, Struktur, Pfaden, Glossar, offenen Stellen, „Zur Freigabe“ und Tabelle; `--oeffentlich` (Alias `--public`) ohne verborgene Seiten aus `[visibility]` |
+| `pfad neu <titel>` · `pfad pruefen <pfad> [--json]` · `pfad uebernehmen [--dry-run] [--json]` · `pfad export <pfad> [--out PFAD] [--oeffentlich] [--notizen] [--ohne-interne]` | Pfade anlegen, vor dem Vortrag prüfen, den Standardpfad in eine Datei übernehmen, als eine HTML-Datei mit nur seinen Karten ausgeben (siehe [Pfade](#pfade)) |
 | `serve [--port N] [--no-open]` | dasselbe Dashboard als lokale Seite mit Bearbeiten: Karten, Eigenschaften, Freigabe, neue Karten, Schaubilder, Modellvorschlag, Einstellungen und Design ([Bearbeiten im Dashboard](#bearbeiten-im-dashboard)); nur aus einem Projektordner mit `wiki.toml`, nur auf diesem Rechner. Ohne `--port` wählt das System einen freien; `--no-open` gibt nur die Adresse aus |
 
 ## wiki.toml
@@ -91,7 +97,7 @@ nicht stehen, wirken nicht; Lint meldet sie als `config_unknown` (Warnung), eben
 [wiki]
 title = "…"                     # Überschrift des Root-Index ("Wiki")
 bundle = "wiki"                 # OKF-Bundle-Wurzel ("wiki")
-actor = "claude-code/claude-opus-5-5"   # generated.by neuer Seiten ("claude-code/unknown"); Umgebungsvariable WIKI_ACTOR geht vor
+actor = "claude-code/unknown"   # generated.by ("claude-code/unknown"); WIKI_ACTOR geht vor, nach Write und Edit in Claude Code ersetzt der Hook einen claude-code/…- oder human:…-Akteur durch das Modell aus dem Transkript
 okf_version = "0.2"
 requires_core = "0.1"           # Version als MAJOR.MINOR ("0.3", ein Patch-Teil zählt nicht), anderes ist ein Bedienfehler; Kern verweigert die Arbeit, wenn er älter ist
 
@@ -103,7 +109,7 @@ protected = ["quellen/volltexte/**"]   # weitere Muster für den Guard-Hook: fnm
 [index]
 root = "overview"               # overview: „Zuerst lesen“ + Bereiche mit Anzahl | full: jede Seite im Root-Index
 sort = "title"                  # title | slug
-entry_tag = "einstieg"          # Seiten mit diesem Tag kommen nach „Zuerst lesen“, sortiert nach order; zugleich Lernpfad im Dashboard
+entry_tag = "einstieg"          # Seiten mit diesem Tag kommen nach „Zuerst lesen“, sortiert nach order
 start_heading = "Zuerst lesen"  # leer = Einstiegsseiten direkt unter dem Titel
 areas_heading = "Bereiche"
 unit = "Seiten"                 # „54 Seiten“ / „54 Karten“
@@ -128,7 +134,7 @@ claims_section = "Kernaussagen" # Abschnitt, in dem bei access: citation nur Hin
 priority_field = ""             # z. B. "core": warnt, wenn solche Quellen nur citation haben
 
 [lint.severity]                 # Code = "error" | "warn" | "info" | "off"
-path_not_kebab = "error"
+path_not_kebab = "error"        # Beispiel, Standard warn
 
 [export.csl]
 path = "quellen/references.json"   # CSL-JSON aller Quellenkarten (id = Slug): der csl-Block, sonst abgeleitet wie im Dashboard
@@ -214,6 +220,27 @@ Fußnotenlabel = `sources[].id`. `body_sha256` in `verified` ist eine Erweiterun
 `by` und `at`; zusätzliche Schlüssel erlaubt §4.1): SHA-256 des Markdown-Körpers ohne Frontmatter, Zeilenenden als
 LF, Leerzeilen an Anfang und Ende entfernt. Andere OKF-Werkzeuge lesen den Eintrag weiter als `{by, at}`. Zeitstempel bleiben beim Lesen Strings (kein Umbau zu `datetime`),
 YAML-Anker und -Aliase sind verboten.
+
+`generated.modelle` (Erweiterung von okfw, §4.1 wie oben) hält fest, welche Modelle am Körper beteiligt waren, als Liste von
+`{harness, anbieter, modell, rolle, art, by, at, body_sha256}`. `by` ist der Akteur, der den Text eingebracht hat, bei einem
+übernommenen Vorschlag also der Mensch; `body_sha256` der Körper zu diesem Zeitpunkt, so ist erkennbar, ob der Text seither
+geändert wurde. `art` ist eine von:
+
+| `art` | Bedeutung | Wer schreibt ihn |
+|---|---|---|
+| `text` | Ein Akteur `<producer>/<version>` hat den Körper geschrieben | `body`, Hook nach Write und Edit |
+| `entwurf` | Der Text beruht auf dem Entwurf einer Rolle | `body --rolle <rolle> [--modell M]` |
+| `vorschlag` | Vorschlag im Dashboard unverändert übernommen, auch von Hand hineinkopiert | `serve` |
+| `vorschlag-bearbeitet` | Vorschlag überarbeitet übernommen; `modell: unknown`, wenn die Datei des Vorschlags nicht mehr da ist | `serve` |
+| `akteur` | Ein früherer `generated.by` mit Modell wurde überschrieben; ein Modellanteil ist möglich, aber nicht sicher, denn der Akteur kann auch nur Metadaten geändert haben. `…/unknown` entfällt, wenn derselbe Harness danach sein Modell nennt | jeder Befehl, der `generated` nachzieht |
+
+Die Liste wird nur länger: dasselbe Modell in derselben Rolle bleibt ein Eintrag mit dem neuesten Stand, ein bekanntes Modell
+ersetzt `unknown` bei gleichem Harness, Anbieter und gleicher Rolle, Freigabe, Metadaten und
+späteres Bearbeiten lassen sie stehen. `human:<id>` und `process:<id>` sind kein Modell und erzeugen keinen Eintrag. Die Freigabe
+bleibt davon getrennt in `verified`. Der Körper selbst bleibt unmarkiert, weil eine Markierung im Text den Prüfwert der Freigabe
+ändern würde; wer nur den Körper kopiert, nimmt die Herkunft nicht mit. Das Dashboard führt die Einträge je Seite in seinen Daten
+(`nodes[].modelle`, dazu `gleich`, ob der Text noch dem Prüfwert entspricht) und zeigt sie sichtbar; die öffentliche Ausgabe lässt
+`by` weg. Das macht die Herkunft nachvollziehbar. Ob es eine gesetzliche Kennzeichnungspflicht erfüllt, ist nicht geprüft.
 
 Quellenkarten (`type: source`) zusätzlich, wenn vorhanden: `access`; `raw_packet` (Pfad zum
 Paket mit `manifest.json`) oder `fulltext` als Zuordnung oder Liste mit `path` und `sha256`
@@ -314,9 +341,9 @@ wird nur angehängt; `log.md` (das Log) ist seine lesbare Projektion:
 ```
 
 `page` ist die Konzept-ID (Pfad im Bundle ohne `.md`), `raw/<slug>` für Rohquellen, `.` für das ganze
-Bundle. Ereignisarten (`kind`): `init`, `bootstrap`, `capture`, `create`, `update`, `verify`, `deprecate`, `delete`, `merge`, `enrich`, `export`, `note`, dazu die Hook-Formen `write` und `edit`;
+Bundle. Ereignisarten (`kind`): `init`, `bootstrap`, `capture`, `create`, `update`, `verify`, `deprecate`, `delete`, `restore`, `merge`, `enrich`, `export`, `note`, dazu die Hook-Formen `write` und `edit`;
 der PostToolUse-Hook schreibt nach einem Edit oder Write, der den Körper geändert hat, über `body --nachziehen`
-ein `update` mit dem Akteur aus `[wiki] actor` (nach einem Write, der die Seite neu anlegt, mit `--neu` ein `create`), sonst
+ein `update` mit dem Akteur wie unter `[wiki] actor` beschrieben (nach einem Write, der die Seite neu anlegt, mit `--neu` ein `create`), sonst
 `write`/`edit` mit `by: process:claude-code-hook`; im Log werden nur `write`/`edit` zu „Erstellt“ (erstes Ereignis einer
 Seite) bzw. „Aktualisiert“, `create` steht immer als „Erstellt“, `update` als „Aktualisiert“. Ältere Formen werden gelesen, nie
 umgeschrieben: `creation`, fehlendes `by`, `page` als bloßer Slug (wird über den Dateinamen aufgelöst). Ist der Ereignisstrom ein
@@ -326,9 +353,9 @@ Symlink aus dem Projekt hinaus, schreibt der Kern kein Ereignis und endet mit Ex
 
 | Schwere | Codes |
 |---|---|
-| error | `bundle_missing`, `frontmatter_invalid`, `missing_type`, `root_index_frontmatter`, `index_frontmatter`, `log_frontmatter`, `log_date_heading`, `status_invalid`, `generated_invalid`, `verified_invalid`, `timestamp_invalid`, `source_invalid`, `source_duplicate_id`, `source_missing`, `footnote_unsourced`, `missing_required`, `enum_invalid`, `visibility_values_missing`, `raw_missing`, `raw_tampered`, `fulltext_tampered`, `citation_with_claims`, `csl_incomplete`, `fundweg_invalid`, `figure_missing`, `rollen_unknown`, `design_unsafe` |
-| warn | `okf_version_missing`, `log_order`, `actor_format`, `order_invalid`, `stable_unverified`, `verified_outdated` (bei stable error), `human_without_check`, `human_unsigned`, `stale`, `footnote_undefined`, `missing_recommended`, `type_folder_mismatch`, `path_not_kebab`, `sections_missing`, `no_footnotes`, `broken_link`, `link_leaves_bundle`, `few_links`, `orphan`, `projection_stale`, `fulltext_absent`, `fulltext_unanchored`, `claim_on_citation_only`, `priority_citation_only`, `source_undated`, `license_missing`, `fulltext_rights`, `fulltext_shared`, `scope_missing`, `visibility_leak`, `fundweg_incomplete`, `figure_caption`, `figure_rights`, `config_unknown` |
-| info | `verified_unhashed`, `check_outdated`, `source_uncited`, `type_unknown`, `contradiction_one_sided`, `projection_unavailable`, `raw_uningested`, `license_unknown`, `license_unclassified`, `fundweg_missing` |
+| error | `bundle_missing`, `frontmatter_invalid`, `missing_type`, `root_index_frontmatter`, `index_frontmatter`, `log_frontmatter`, `log_date_heading`, `status_invalid`, `generated_invalid`, `verified_invalid`, `timestamp_invalid`, `source_invalid`, `source_duplicate_id`, `source_missing`, `footnote_unsourced`, `missing_required`, `enum_invalid`, `visibility_values_missing`, `raw_missing`, `raw_tampered`, `fulltext_tampered`, `citation_with_claims`, `csl_incomplete`, `fundweg_invalid`, `figure_missing`, `rollen_unknown`, `design_unsafe`, `pfad_karte_fehlt`, `pfad_sichtbarkeit_fehlt` |
+| warn | `okf_version_missing`, `log_order`, `actor_format`, `order_invalid`, `modelle_invalid`, `modell_unbekannt`, `modell_herkunft_fehlt`, `stable_unverified`, `verified_outdated` (bei stable error), `human_without_check`, `human_unsigned`, `stale`, `footnote_undefined`, `missing_recommended`, `type_folder_mismatch`, `path_not_kebab`, `sections_missing`, `no_footnotes`, `broken_link`, `superseded_missing`, `link_leaves_bundle`, `few_links`, `orphan`, `projection_stale`, `fulltext_absent`, `fulltext_unanchored`, `claim_on_citation_only`, `priority_citation_only`, `source_undated`, `license_missing`, `fulltext_rights`, `fulltext_shared`, `scope_missing`, `visibility_leak`, `fundweg_incomplete`, `figure_caption`, `figure_rights`, `figure_generated`, `config_unknown`, `pfad_karte_entwurf`, `pfad_karte_veraltet`, `pfad_karte_widerspruch`, `pfad_karte_abgeloest`, `pfad_lage`, `pfad_ohne_station` |
+| info | `verified_unhashed`, `check_outdated`, `source_uncited`, `type_unknown`, `contradiction_one_sided`, `projection_unavailable`, `raw_uningested`, `license_unknown`, `license_unclassified`, `fundweg_missing`, `pfad_text_ohne_beleg` |
 
 Umfang, Sichtbarkeit und Fundweg: `scope_missing` = Seite ohne Umfangsfeld (bei Quellen nur, wenn sich nichts
 ableiten lässt); ungültige Werte meldet `enum_invalid`, auch für das Sichtbarkeitsfeld.
@@ -348,7 +375,7 @@ darunter; `figure_missing` = die Datei fehlt oder die Bereinigung lehnt sie ab (
 `<!ENTITY`, mehr als 200 KB, weder `viewBox` noch `width` und `height` als Zahlen, zu viele Elemente, auch nach dem Auflösen
 von `<use>`); `figure_rights` = die Bildunterschrift nennt das Bild
 „übernommen“, und das Recht „Abbildung oder Tabelle übernehmen“ ist für die belegte Quelle laut `rechte` nicht „erlaubt“
-(mit Auflage oder erst fragen; eine Genehmigung steht als `rights:` auf der Karte). Einzelheiten unter
+(mit Auflage, erst fragen oder nicht erlaubt; eine Genehmigung steht als `rights:` auf der Karte); `figure_generated` = das jüngste Ereignis der Abbildung nennt ein Modell, und die Zeile darunter enthält weder „KI“ noch „generiert“. Einzelheiten unter
 [Schaubilder](#schaubilder). `rollen_unknown` = `[rollen] daten` außerhalb von `oeffentlich`, `intern`,
 `personenbezogen` oder `[rollen] sperre` keine Liste von Anbieter-Kennungen (siehe [Modellrollen](#modellrollen));
 `design_unsafe` = die Designdatei fehlt, obwohl `[dashboard] design` sie nennt, ist nicht UTF-8 oder liegt außerhalb des
@@ -375,8 +402,19 @@ Rohquellen: `raw_missing` = das Verzeichnis aus `raw_packet` liegt außerhalb de
 Liste) oder ein Eintrag ohne `path`, mit `path` außerhalb des Projekts oder mit einer Datei, die fehlt oder vom
 `sha256` im Manifest abweicht.
 
-Lernpfad: `order_invalid` = eine Einstiegsseite trägt `order` nicht als Zahl. Ganzzahliger Text zählt trotzdem als Zahl,
+Root-Index: `order_invalid` = eine Einstiegsseite trägt `order` nicht als Zahl. Ganzzahliger Text zählt trotzdem als Zahl,
 alles andere steht wie eine Seite ohne `order` am Ende.
+
+Pfade (siehe [Pfade](#pfade)): `pfad_karte_entwurf` (warn), `pfad_karte_veraltet` (warn, Freigabe verfallen),
+`pfad_karte_widerspruch` (warn, offener Widerspruch in der Karte), `pfad_karte_abgeloest` (warn, `status: deprecated` oder
+`superseded_by`) und `pfad_karte_fehlt` (error, die Karte gibt es nicht) melden den Stand der Karten auf einer Station.
+`pfad_text_ohne_beleg` (info) = eigener Text mit Zahl und ohne Fußnote. `pfad_sichtbarkeit_fehlt` (error) = in einem Wiki mit `[visibility]` trägt ein Pfad keinen eigenen Wert.
+`pfad_lage` (warn) = `lage` nennt eine Station oder ein Element, das es nicht gibt, ist ungültig, oder zwei Elemente liegen
+übereinander. `pfad_ohne_station` (warn) = kein Text und keine Überschrift.
+
+Modellherkunft: `modelle_invalid` = Eintrag in `generated.modelle` ohne `modell` oder mit unbekannter `art`; `modell_unbekannt` = das
+Modell steht als `unknown` da (`WIKI_ACTOR` oder `[wiki] actor` setzen, bei `body --rolle` auch `--modell`); `modell_herkunft_fehlt`
+= das Ereignisprotokoll nennt ein Modell, das in `generated.modelle` fehlt.
 
 Vertrauen: `stable_unverified` = `status: stable` ohne `verified`-Eintrag eines Menschen (`human:<id>`);
 ein Vermerk durch Claude oder einen Prozess reicht dafür nicht. `verified_outdated` = die letzte Freigabe
@@ -404,6 +442,36 @@ mit `date: o. J.` (auch `n. d.`, `undatiert`) vermerken; dann entfällt die Warn
 einen `csl`-Block ohne Titel, ohne `issued` oder ohne Autorschaft (`author` oder `editor`) und einen Block ohne `DOI`
 und ohne `accessed`; ein fehlendes `issued` fällt also schon dort auf.
 
+## Karten ablösen und löschen
+
+Ablösen ist die erste Wahl: `deprecate` setzt `status: deprecated`, die Karte bleibt erhalten, und Links und Belege bleiben gültig. `--nachfolger`
+trägt `superseded_by: /<seite>.md` ein; zeigt das Feld ins Leere, meldet der Lint `superseded_missing`. Das darf jeder Akteur, wie
+`verify --status deprecated`. Zurück geht es mit `verify <seite> --by … --status draft`; das Dashboard gibt abgelöste Karten nicht frei.
+
+Löschen ist die zweite Stufe. `delete <seite>` zeigt ohne `--yes` nur die Folgen:
+
+- Belege: `sources[]` anderer Karten, die auf sie zeigen, mit der Zahl ihrer Fußnoten
+- Fußnoten und Links im Text anderer Karten, Nennungen als Nachfolger, Symlinks auf die Datei
+- Karten mit unlesbarem Frontmatter, deren Belege sich nicht prüfen lassen
+- das Rohquellen-Paket (`raw_packet`, sonst `<raw>/<slug>` bei Quellenkarten)
+
+Mit `--yes` gilt:
+
+- Nur eine abgelöste Karte und nur `--by human:<id>`. Karten mit unlesbarem Frontmatter lassen sich nicht ablösen und dürfen darum direkt gelöscht werden. Karten aus `[paths] protected` und Symlinks bleiben stehen.
+- Belege sperren: Der Lint meldete danach `source_missing` als Fehler. Erst dort ersetzen oder ausdrücklich `--belege-brechen`; das Ereignis nennt die betroffenen Karten.
+- Die Rohquelle bleibt liegen (danach `raw_uningested`). Nur `--mit-rohquelle` nimmt sie mit, und nur, wenn keine andere Karte sie nutzt und keine Karte mit unlesbarem Frontmatter das offenlässt.
+
+Der Kern löscht nichts endgültig. Die Karte wandert nach `<bundle>/.papierkorb/<eintrag>/` (`karte.md`, `eintrag.json`, gegebenenfalls `rohquelle/`):
+
+- **Warum nicht Git:** Ein Wiki muss kein Repo sein, und der Kern führt keine Git-Befehle aus. Der Ordner funktioniert überall und auch für noch nicht committete Karten.
+- **Warum im Bundle:** Der Punkt am Anfang hält ihn aus Seiten, Indexen, Lint und Dashboard, und er bleibt beim Verschieben des Wikis dabei.
+- **Im Repo:** Der Papierkorb trägt ein eigenes `.gitignore`, damit Gelöschtes nicht mit dem nächsten Commit wieder ins Repo kommt. Bleibend ist das Ereignis `delete` im Ereignisstrom. Der Guard-Hook sperrt den Ordner für Edit und Write.
+- **Veröffentlichen:** Wer das Bundle als Ordner weitergibt, nimmt `.papierkorb/` nicht mit, denn dort liegt auch, was öffentlich nicht mehr erscheinen soll.
+
+`restore` prüft einen Eintrag wie etwas Fremdes: Das Ziel muss wieder eine Seite im Bundle ergeben, frei sein und außerhalb von `[paths] protected` liegen, und im Eintrag darf kein Symlink liegen. Endgültig entfernen heißt, den Ordner des Eintrags von Hand zu löschen.
+
+Im Dashboard (`serve`) heißen die Knöpfe an der Karte „Ablösen“ und, bei abgelösten Karten, „Löschen“. Der Dialog nennt die Folgen und fragt Belege und Rohquelle einzeln ab. Die Einstellungen haben einen Reiter „Papierkorb“. Akteur ist `human:<kennung>` aus den Einstellungen. Der Server prüft Folgen und Stand der Karte beim Absenden noch einmal: Kam ein Beleg hinzu oder hat sich die Karte geändert, antwortet er 409 und ändert nichts.
+
 ## Freigabe über Claude
 
 Ziel: Eine Freigabe, die Claude auf Zuruf schreibt („Charge 3 freigeben“), bleibt an den Inhalt gebunden,
@@ -422,7 +490,7 @@ Körper danach, verfällt die Freigabe: `body` setzt eine stable-Seite auf `draf
 Vermerke, die zum jetzigen Inhalt passen; Seiten mit
 Vermerken, von denen keiner mehr passt, stehen getrennt als „n verfallen“, dazu „n zur Freigabe“. Ohne frische Gegenprüfung lehnt
 `verify --status stable` ab (`--force` schreibt trotzdem und vermerkt das im Ereignis; Lint
-`human_without_check`). `verify --status deprecated` (Seite überholt) darf jeder Akteur setzen, auch Claude; die Seite
+`human_without_check`). Das Dashboard fragt in diesem Fall nach, statt abzulehnen. `verify --status deprecated` (Seite überholt) darf jeder Akteur setzen, auch Claude; die Seite
 fällt damit aus `no_footnotes` und aus „Zur Freigabe“ (auch aus „n zur Freigabe“ in `status`). `status` und `verified` ändert nur `verify` und `body` (auch `--nachziehen`), das eine stable-Seite auf draft setzt: Der Guard blockiert Edit und Write, die
 diese Schlüssel einer Wiki-Seite ändern; eine neue Seite darf `status: draft` tragen. Der Guard sperrt
 `status` und `verified` nur für die Schreibwerkzeuge von Claude; ein Prozess mit Shell, auch eine
@@ -481,7 +549,7 @@ Arbeitshilfe, keine Rechtsberatung; im Zweifel gilt `fragen`.
 `rights: {abbildung: "ja: Abdruckgenehmigung des Verlags vom 2026-10-20"}`; den Beleg dafür als
 Quelle erfassen).
 
-Wer eine Rohquelle allein auf § 44b UrhG stützt, muss die Kopie löschen, sobald sie für das Text und Data Mining nicht mehr erforderlich ist (Abs. 2 S. 2); okfw legt Rohquellen dauerhaft ab und löscht sie nicht von selbst.
+Wer eine Rohquelle allein auf § 44b UrhG stützt, muss die Kopie löschen, sobald sie für das Text und Data Mining nicht mehr erforderlich ist (Abs. 2 S. 2); okfw legt Rohquellen dauerhaft ab und löscht sie nicht von selbst, und `delete --mit-rohquelle` verschiebt sie nur in den Papierkorb, aus dem der Eintrag von Hand zu entfernen ist.
 
 Lizenzen finden: `lizenz <seite> --fetch` fragt Crossref (bevorzugt die Lizenz der Verlagsfassung), für
 DOIs, die Crossref nicht kennt, DataCite, dann Europe PMC und OpenAlex (je Fundort, Verlagsfassung zuerst);
@@ -525,24 +593,38 @@ Bereich im Root-Index. Hat ein Typ `folder = "abbildungen"`, bleiben dessen `.md
 
 **Bereinigung** (nur Standardbibliothek, `xml.etree`), beim Ablegen und bei jedem Bau des Dashboards:
 
-- Abgelehnt wird, was sich nicht sicher lesen lässt: alles außer UTF-8 (mit oder ohne BOM), `<!DOCTYPE` und `<!ENTITY`,
-  ungültiges XML, eine Wurzel, die kein `svg` ist, mehr als 200 KB oder 5000 Elemente, Verschachtelung über 60 Ebenen, ein
-  `<use>`, das sich selbst enthält oder die Zeichnung nach dem Auflösen aller `<use>` auf mehr als 20000 Elemente wachsen
-  ließe, und ein fehlendes `viewBox` ohne `width` und `height` als Zahlen (sonst wird das `viewBox` daraus abgeleitet).
+- Abgelehnt wird, was sich nicht sicher lesen lässt: alles außer UTF-8 (mit oder ohne BOM), `<!ENTITY` und jedes
+  `<!DOCTYPE` außer dem Standardkopf, ungültiges XML, eine Wurzel, die kein `svg` ist, mehr als 200 KB oder 5000 Elemente,
+  Verschachtelung über 60 Ebenen, ein `<use>`, das sich selbst enthält oder die Zeichnung nach dem Auflösen aller `<use>`
+  auf mehr als 20000 Elemente wachsen ließe, und ein fehlendes `viewBox` ohne umrechenbare `width` und `height`: Zahlen
+  oder `px`, `pt`, `pc`, `mm`, `cm`, `in`, `Q` werden in Nutzereinheiten umgerechnet, `%` und `em` nicht.
+- Der Standardkopf ist genau `<!DOCTYPE svg PUBLIC "…" "…">` mit einem Paar aus den W3C-Kennungen für SVG 1.0 und 1.1 (wie
+  ihn Illustrator oder Graphviz schreiben), vor dem Wurzelelement und ohne internes Subset. Er wird entfernt, nie gelesen;
+  die DTD wird nicht geladen.
 - Elemente außerhalb der Liste `svg g path rect circle ellipse line polyline polygon text tspan title desc defs
-  linearGradient radialGradient stop marker clipPath use` entfallen samt Inhalt (`script`, `style`, `a`, `image`,
-  `foreignObject` …), ebenso Elemente und Attribute fremder Namensräume (etwa von Inkscape).
+  linearGradient radialGradient stop marker clipPath use` entfallen samt Inhalt (`script`, `a`, `image`,
+  `foreignObject` …), ebenso Elemente und Attribute fremder Namensräume (etwa von Inkscape). Aus `<switch>` wird eine
+  Gruppe mit der ersten erlaubten Alternative, so bleibt der Ersatztext neben einem `foreignObject` aus draw.io.
+- `<style>` und `class` kommen nie auf die Seite. Regeln mit einfachem Selektor (`rect`, `.klasse`, `rect.klasse`, `#id`, `*`)
+  werden in das `style`-Attribut der passenden Elemente übernommen, nach Gewicht und Reihenfolge wie im Browser, jede
+  Deklaration durch dieselben Prüfungen wie unten. Anderes (`g .a`, `@media`, `@import`, `@font-face`) entfällt und wird
+  als `Stilregeln nicht übertragen` gemeldet. Wächst die Datei dadurch über 200 KB, wird sie abgelehnt.
 - Attribute nur aus Geometrie und Präsentation (Koordinaten, `viewBox`, `transform`, `fill`, `stroke`, Schrift, …) und `id`;
-  kein `class`, kein `on*`. `href` und `xlink:href` nur auf `use` und Verläufen und nur als `#…`; `url(…)` nur als `url(#…)`;
+  kein `on*`. `href` und `xlink:href` nur auf `use` und Verläufen und nur als `#…`; `url(…)` nur als `url(#…)`;
   Ein Wert mit `\`, `/*`, `javascript:`, `data:`, einem `url(` auf anderes als `#…`, `@` im `style` oder einer
   CSS-Ladefunktion (`image-set(`, `src(`, `image(`, `cross-fade(`, `element(`, `paint(`) verwirft das ganze Attribut.
-- `style` bleibt auf die Eigenschaften der Zeichnung gekürzt (Füllung, Strich, Deckkraft, Schrift, Marker, Clip); alles
+- `style` bleibt auf die Eigenschaften der Zeichnung gekürzt (Füllung, Strich, Deckkraft, Schrift, Marker, Clip, `display`); alles
   andere, etwa `position` oder `width`, entfällt, und die Meldung auf stderr nennt es als `Stil <name>`. `transform` am
   Wurzelelement entfällt, weil es die Zeichnung über die Seite höbe.
 - Das Wurzelelement bekommt `role="img"`; `aria-label` mit dem Titel des Bildes aus der Seite setzt erst der Bau des
   Dashboards, die abgelegte Datei trägt es nicht.
 - Im Dashboard bekommen `id`s und ihre Verweise je Abbildung ein Präfix (`abb1-`, `abb2-` …), damit sich mehrere Abbildungen
   mit gleichen `id`s nicht stören.
+
+**Dialog.** „Abbildung einfügen“ fragt den Server zuerst nur (`pruefen`), geschrieben ist dann noch nichts. Gibt es den Namen
+schon oder ändert das Bereinigen das Bild, zeigt der Dialog die bereinigte Fassung, was entfällt und warum, und fragt:
+vorhandene ersetzen (mit den Seiten, die sie schon zeigen) oder unter einem freien Namen ablegen. Reine Angaben der Werkzeuge
+(`version`, `xml:space`, `-inkscape-…`, `metadata`, fremde Namensräume) gelten als „ohne Wirkung“ und halten nichts auf.
 
 **Dashboard.** Die Leseansicht bettet das bereinigte SVG inline ein, als `<figure class="abbildung">` mit `<figcaption>`
 (die Zeile `*Abb. …*` samt APA-Beleg); die Datei bleibt ohne Netz. Fehlt die Datei, wird sie abgelehnt oder ist sie ein Symlink aus dem Bundle hinaus, steht statt des Bildes
@@ -655,13 +737,85 @@ Weiterleitung, der Key geht nur an den eingetragenen Host. Der Key steht in kein
 (`~/.local/state/okfw/rollen.jsonl`, `$OKFW_ROLLEN_PROTOKOLL` legt eine andere Datei fest; sie enthält weder Auftrag noch
 Antwort).
 
-Der Harness bekommt nur eine feste Auswahl an Umgebungsvariablen (`PATH`, `HOME`, `TMPDIR`, Sprache und Terminal, Proxy- und
+Der Harness bekommt nur eine feste Auswahl an Umgebungsvariablen (`PATH`, `HOME`, `TMPDIR`, `USER`, `LOGNAME`, `SHELL`, `XDG_*`, Sprache und Terminal, Proxy- und
 Zertifikatsvariablen, `CLAUDE_CONFIG_DIR`), nicht den Rest der Umgebung; Key und Anmeldung für den gewählten Anbieter setzt der
 Aufruf selbst. Jeder Aufruf läuft in einem eigenen Ordner, den nur der Aufrufer lesen darf und der danach gelöscht wird.
 `CLAUDE_CONFIG_DIR` geht weiter, weil `claude` sonst seine Anmeldung nicht findet: Eine `settings.json` in diesem Ordner kann den
 Endpunkt eines `claude` mit Anmeldung ändern, ohne dass `rollen.py` es sieht.
 
 Exit: 0 ok · 2 Bedienfehler oder Sperre · 3 Harness oder Anbieter gescheitert · 10 Harness `sitzung`.
+
+## Pfade
+
+Ein Pfad führt durch ein Wiki: Stationen in fester Folge, jede mit eigenem Text und einer oder mehreren Karten. Derselbe Pfad
+lässt sich lesen und vortragen. Er ist eine gewöhnliche Karte mit `type: pfad` im Ordner `pfade/`; den Typ kennt jedes Wiki, ohne
+Eintrag in der `wiki.toml`. Die Oberfläche in `serve` schreibt die Datei, niemand muss sie von Hand anfassen.
+
+```markdown
+---
+type: pfad
+title: Kaffee verstehen
+description: In zwanzig Minuten vom Wasser zur Tasse
+status: draft
+lage:
+  was-im-filter-passiert:
+    /concepts/wasser.md: {pos: [0, 0, 6, 5]}
+    /concepts/mahlgrad.md: {pos: [6, 0, 6, 5], zeigt: absatz}
+    text-1: {pos: [0, 5, 12, 2]}
+---
+
+# Was im Filter passiert
+
+Zwei Größen entscheiden, wie die Tasse schmeckt.
+
+- [Wasser](/concepts/wasser.md)
+- [Mahlgrad](/concepts/mahlgrad.md)
+
+> [!notiz]
+> Hier die zwei Tassen zeigen.
+```
+
+- **Stationen:** Jede Überschrift erster Ebene beginnt eine. Ein Listenpunkt, der nur aus einem Link auf eine `.md` besteht, setzt
+  diese Karte auf die Station. `> [!notiz]` ist eine Sprechernotiz. Anderer Text wird zum Textfeld; eine Zeile `---` trennt zwei
+  Textfelder. Text vor der ersten Überschrift ist ein Vorspann und erscheint unter dem Titel des Pfads als erste Station.
+- **Lage:** `pos` sind Spalte, Zeile, Breite und Höhe im Raster (`raster`, Standard 12 Spalten); `zeigt` ist `kurz` (Titel,
+  Beschreibung, Prüfstand; Standard), `absatz` oder `ganz` (mit Scrollen). Fehlt die Lage, ordnet okfw die Station selbst an. Der
+  Schlüssel der Station entsteht aus der Überschrift: Wer sie von Hand umbenennt, verliert nur die Lage (Lint `pfad_lage`);
+  `serve` nimmt sie mit.
+- **Format:** OKF v0.2 kennt keine Pfade und braucht dafür nichts: `type` ist frei, weitere Schlüssel sind erlaubt, Links zwischen
+  Konzepten sind Markdown-Links relativ zur Bundle-Wurzel. Andere Programme zeigen einen Pfad als Text mit Links. `lage` und `raster` sind okfw-Erweiterungen.
+- **Im Graphen:** Pfade sind keine Knoten und zählen dort nicht als Verbindung. Eine Karte, auf die nur ein Pfad verweist, bleibt
+  für den Lint verwaist. Das Dashboard listet Pfade in einem eigenen Abschnitt.
+
+**Belege.** Der Pfad macht nichts geprüfter, als es ist. Karten werden nur verwiesen, nicht kopiert, und zeigen immer ihren eigenen
+Stand: Rahmen und „geprüft“, sonst ein Abzeichen wie „Entwurf“, „Freigabe verfallen“, „Widerspruch“ oder „Abgelöst“; eine fehlende
+Karte erscheint als Platzhalter. Eigener Text hat keinen Rahmen und immer den Vermerk „eigener Text“; Fußnoten sind möglich wie auf
+jeder Seite. Eine Freigabe des Pfads (`verify`, nur auf der Befehlszeile) deckt seinen Text und die Folge, nie die Karten; Verschieben auf der Fläche
+ändert nur das Frontmatter und lässt sie stehen. `pfad pruefen` und der Knopf „Vortrag starten“ zeigen dieselbe Liste; der Knopf
+warnt, du entscheidest.
+
+**Sichtbarkeit.** Eigener Text ist nicht geschützt, nur weil die Karten es sind. In einem Wiki mit `[visibility]` braucht ein Pfad
+darum einen eigenen Wert: Ohne ihn meldet der Lint einen Fehler, und er fehlt in jeder öffentlichen Ausgabe. Neue Pfade sind zunächst
+intern. Im öffentlichen Dashboard entfällt eine interne Karte ohne Spur, auch ihr Titel.
+
+**Vortrag.** Eine Station je Bild im festen Format 16:9. ← → oder Leertaste blättern, Pos1 und Ende springen, F schaltet Vollbild, N die
+Notizen, P druckt je Station eine Seite (im Druckdialog „Als PDF sichern“), Esc beendet. „Notizen im eigenen Fenster“ öffnet ein zweites
+Fenster fürs eigene Blickfeld; lässt der Browser das nicht zu, stehen die Notizen unter der Bühne. In der Dashboard-Datei stehen keine
+Notizen, `serve` holt sie erst beim Start. In der Pfad-Datei selbst stehen sie im Klartext: Wer das Bundle weitergibt, gibt sie mit.
+
+**Export.** `pfad export <pfad>` schreibt nach `build/pfad-<name>.html` (mit `--oeffentlich`: `pfad-<name>-oeffentlich.html`) eine Datei ohne Nachladen aus dem Netz, die nur die Karten dieses
+Pfads enthält; Links auf andere Karten werden zu Text. Abzeichen und Datum sind eingefroren: Die Datei weiß nicht, was sich danach ändert.
+
+| Schalter | Wirkung |
+|---|---|
+| `--notizen` | nimmt die Sprechernotizen mit; nie zusammen mit `--oeffentlich` |
+| `--oeffentlich` | nutzt die öffentliche Ansicht; bricht ab bei fehlenden und abgelösten Karten, bei internen Karten (nennt die Stationen) und wenn der Pfad selbst intern ist oder keinen eigenen Wert trägt |
+| `--ohne-interne` | öffentlich: interne Karten weglassen statt abbrechen, ohne Spur in der Datei, die Warnung nennt sie |
+
+**Wikis mit Schlagwort.** Karten mit dem Schlagwort aus `entry_tag` und `order` liefern weiter „Zuerst lesen“ im Root-Index. Damit ein Wiki seine
+Reihenfolge behält, erscheinen sie unter „Pfade“ auch als Pfad „Zuerst lesen“ mit einer Karte je Station; geschrieben wird dafür nichts
+(`pfad pruefen zuerst-lesen`, `pfad export zuerst-lesen`). „Bearbeiten“ in `serve` oder `pfad uebernehmen [--dry-run]` legen daraus `pfade/zuerst-lesen.md` an und
+berichten Auffälligkeiten wie `order` als Text. Die Karten bleiben dabei unverändert; ab dann gilt im Dashboard nur die Datei.
 
 ## Als Bibliothek
 
@@ -796,13 +950,9 @@ Symlink am Zielpfad durch eine Datei, statt durch ihn hindurch zu schreiben.
   keine Angaben oder Übersichtsseiten an der Seite), keine Übersichtskästen unter dem Graphen, keine
   Kacheln „Verbindungen“ und „Quellenlage“.
 - **Tabelle:** alle Seiten mit Beschreibung, Typ, Unterart, Lizenz und Verbindungen, sortierbar.
-- **Lernpfad:** Seiten mit dem Schlagwort aus `[index] entry_tag` (Standard `einstieg`) in der Reihenfolge
-  von `order`, dann Titel, wie „Zuerst lesen“ im Root-Index. Unter dem Überblick als nummerierte Schritte mit
-  Typ und Beschreibung, „Lernpfad starten“ öffnet Schritt 1 in der Leseansicht. Dort steht über dem Titel
-  „Lernpfad · Schritt N von M“ mit ‹ ›, nach dem Text „← Schritt N−1“ und „Schritt N+1 →“, am Ende „Ende
-  des Lernpfads“. Ohne solche Seiten fehlt der Abschnitt. Mit `[scope]` folgt der Lernpfad dem Umschalter: Es
-  zählen nur Seiten des gewählten Umfangs, durchnummeriert ab 1, die Kopfzeile nennt die Gesamtzahl. Eine Seite
-  außerhalb, über einen Link geöffnet, zeigt keinen Schritt.
+- **Pfade:** alle [Pfade](#pfade), je mit „Lesen“ (Stationen untereinander, Karten klappen auf, auf dem Telefon einspaltig) und
+  „Vortrag starten“. Ohne Pfad fehlt der Abschnitt. Mit `[scope]` folgen Pfade dem Umschalter: Karten außerhalb des gewählten Umfangs entfallen,
+  eigener Text bleibt stehen, eine Station ohne verbliebene Karte oder Text entfällt.
 - **Textdiagramme:** Codeblöcke ```` ```text ```` (auch `txt`, `plain`, `plaintext`, `ascii`, `tree`,
   `diagram` und unmarkierte Blöcke mit Rahmenzeichen U+2500–U+257F) erscheinen in der Leseansicht als
   Abbildung: heller Grund, JetBrains Mono ohne Ligaturen, Zeilenhöhe 1,45, damit `│ ├ └` senkrecht
@@ -831,11 +981,11 @@ Symlink am Zielpfad durch eine Datei, statt durch ihn hindurch zu schreiben.
   eingeben, Seiten markieren; die Zeile darunter ist der fertige Aufruf
   `uv run --no-config --quiet …/okfw.py --root … verify <seiten> --by human:<id> --status stable --note …` mit „Kopieren“.
   Pfade unter dem Home-Ordner stehen mit `~`. Ohne solche Seiten fehlt der Abschnitt.
-- **Sprungleiste:** unter dem Titel Links zu Lernpfad, Glossar, Offene Stellen, Zur Freigabe und Alle Seiten, soweit
+- **Sprungleiste:** unter dem Titel Links zu Pfade, Glossar, Offene Stellen, Zur Freigabe und Alle Seiten, soweit
   vorhanden; ein eingeklappter Abschnitt klappt dabei auf.
-- Lernpfad, Glossar und Offene Stellen folgen dem Umschalter „Umfang“; die Kopfzeile nennt dann auch die Gesamtzahl.
+- Pfade, Glossar und Offene Stellen folgen dem Umschalter „Umfang“; die Kopfzeile nennt dann auch die Gesamtzahl.
 - **Umfang:** Mit `[scope]` steht neben den Typ-Chips ein Umschalter „Umfang: alle | Kern | …“. Er
-  blendet Seiten außerhalb des gewählten Umfangs in Netz, Schichtengraph, Tabelle und Lernpfad aus, startet mit
+  blendet Seiten außerhalb des gewählten Umfangs in Netz, Schichtengraph, Tabelle und Pfaden aus, startet mit
   `[scope] default` und merkt sich die Wahl im Browser. „Farbe: Umfang“ färbt nach Wert; abgeleitete
   Quellen erscheinen als Ring, die Tabelle zeigt „(abgeleitet)“.
 - **Sichtbarkeit und öffentliche Ausgabe:** Mit `[visibility]` zeigt die normale Ausgabe alles; verborgene
@@ -906,12 +1056,16 @@ qm = "Qualitätsmanagement"
   `footnotes`, `tables` und `sane_lists`, ohne `attr_list` und `md_in_html`); rohes HTML und `{: …}` in Seiten werden nur als
   Text gezeigt, nie ausgeführt.
 
-Gestaltung: Alabaster-Grund #F4F3ED,
-weiße Karten mit 14 px Radius, Charcoal #1A1A1A, Akzent Gelb #FCE53A (dunkel: Blau #3a5efc),
-Überschriften IBM Plex Serif, Text IBM Plex Sans, Code und Metadaten JetBrains Mono; der Artikeltext
-übernimmt `.prose-content`. Die Schriften liegen in `templates/fonts/` und werden eingebettet
-(etwa 400 KB je Dashboard), damit die Datei auch ohne Netz gleich aussieht; ein CSS-Kommentar davor nennt
+Gestaltung „Streckennetz“: Alabaster-Grund #F4F3ED,
+weiße Karten mit 22 px Radius, Charcoal #1A1A1A, Akzent Gelb #FCE53A (dunkel: Blau #3a5efc) nur als Fläche oder Linie,
+nie als Textfarbe. Der Kopf ist ein Schild, Pfade sind Linien mit Haltestellen, im Vortrag trägt die Akzentfarbe das
+Plakat. Überschriften Bricolage Grotesque, Text Instrument Sans, in der Leseansicht einer Karte Newsreader, Code
+JetBrains Mono; der Artikeltext übernimmt `.prose-content`. Die Schriften liegen in `templates/fonts/` und werden
+eingebettet (etwa 530 KB je Dashboard), damit die Datei auch ohne Netz gleich aussieht; ein CSS-Kommentar davor nennt
 Copyright und Lizenz.
+
+Bewegung kommt nur aus CSS: Übergänge zwischen Stationen im Vortrag, sanfte Einblendungen, Stationen beim Scrollen,
+wo der Browser das kann. `prefers-reduced-motion: reduce` schaltet alles ab, beim Drucken läuft nichts.
 
 ### Design
 
@@ -922,7 +1076,7 @@ Gelesen wird die Datei nur beim Bau; sie muss UTF-8 sein und im Projektordner li
 Lint `design_unsafe`), wenn sie `</style` enthält oder eines von: `@import`; `url(` mit einem anderen Ziel als `#…` oder
 `data:` für Schriften und Rasterbilder (`font/…`, `application/font-…`, `image/png`, `image/jpeg`, `image/gif`,
 `image/webp`, `image/avif`), auch in einer Zeichenkette und auch ohne schließende Klammer; die Ladefunktionen `image-set(`,
-`src(`, `image(`, `cross-fade(`, `element(` und `paint(`; `expression(`, `-moz-binding` und `behavior:`. Kommentare zählen nicht (außer für
+`src(`, `image(`, `cross-fade(`, `element(` und `paint(`; `expression(`, `-moz-binding` und `behavior:` (`scroll-behavior:` und `overscroll-behavior:` sind erlaubt). Kommentare zählen nicht (außer für
 `</style`), CSS-Maskierungen werden vorher aufgelöst, und ein Kommentarzeichen in einer Zeichenkette oder in `url(…)` ohne
 Anführungszeichen beginnt keinen Kommentar, versteckt also nichts. `<script` im Design wird beim Einbetten zu `\3c script`
 (für CSS dasselbe), damit die Daten-Marke, an der `serve` einsetzt, genau einmal in der Datei steht. Die Datei bleibt dadurch
@@ -932,7 +1086,10 @@ Die Variablen in `:root` (hell) und `:root[data-theme="dark"]` (dunkel):
 
 | Variable | Bedeutung |
 |---|---|
-| `--font-heading`, `--font-body`, `--font-mono` | Schriften: Überschriften, Text, Code und Metadaten |
+| `--font-heading`, `--font-body`, `--font-lesen`, `--font-mono` | Schriften: Überschriften, Text, Leseansicht einer Karte, Code |
+| `--schild`, `--auf-schild` | Kopf als Schild, Vortragsleiste und die Schrift darauf |
+| `--linie`, `--haltestelle` | Linie durch die Stationen und Füllung der Haltestellen |
+| `--okfw-dauer`, `--okfw-kurve` | Dauer und Verlauf der Übergänge |
 | `--page` | Grund der Seite |
 | `--surface` | Flächen: Karten, Felder, Knotenrand |
 | `--ink`, `--ink-2`, `--muted` | Text: voll, abgestuft, zurückgenommen |
@@ -970,13 +1127,13 @@ Prozess auf derselben Adresse. Beenden mit Ctrl+C.
 
 **Die Dashboard-Datei zum Weitergeben bleibt eine Leseansicht.** `dashboard` und `dashboard --oeffentlich` enthalten
 keinen Bearbeitungscode und keine Adresse eines Servers; die Vorlage hat nur ein paar Andockpunkte
-(`window.okfwEdit?.…`), die ohne `serve` ins Leere gehen. Bearbeiten (`templates/serve.js`, `serve.css`) wird erst
+(`window.okfwEdit?.…`), die ohne `serve` ins Leere gehen. Bearbeiten (`templates/serve.js`, `serve.css` und die Dateien für Aufträge) wird erst
 beim Ausliefern eingefügt.
 
 **Sicherheit.** Der Server bindet nur `127.0.0.1` und kennt einen zufälligen Token je Start. Jede Anfrage prüft den
 Host (nur `127.0.0.1:<port>` und `localhost:<port>`, gegen DNS-Rebinding). Schreibende Anfragen verlangen zusätzlich das
 Cookie (HttpOnly, SameSite=Strict), den Kopf `X-OKFW`, eine passende `Origin`, `Content-Type: application/json` und
-höchstens 2 MB. Die Seite liefert eine Content-Security-Policy ohne Fremdhosts (`connect-src 'self'`, Skripte nur mit
+höchstens 2 MB; nur `/api/quelle/datei` nimmt stattdessen PDF oder Markdown mit den Grenzen unter „Quellen aufnehmen“. Die Seite liefert eine Content-Security-Policy ohne Fremdhosts (`connect-src 'self'`, Skripte nur mit
 Nonce). Seiten-IDs kommen immer aus dem geladenen Wiki; der Server setzt nie einen Pfad aus einer Anfrage zusammen. Im Wiki
 schreibt er nur über den Kern; außerhalb davon schreibt er allein die Nutzerdatei von `rollen.py` und die Designdatei im
 Projektordner (beide ersetzen einen Symlink, statt durch ihn zu schreiben), dazu temporäre Ordner und das Protokoll von
@@ -992,10 +1149,10 @@ Server selbst, ohne Ereignis.
 |---|---|
 | Inhalt speichern | wie `body`: `generated` wird nachgezogen, `stable` fällt auf `draft`, Ereignis `update` |
 | Eigenschaften speichern | gültiges YAML, unbekannte Felder und ihre Reihenfolge bleiben Zeichen für Zeichen; `status`, `verified` (mit dem Prüfwert) und `generated` sind geschützt (422) |
-| Freigeben, Alle freigeben | wie `verify --by human:<kennung> --status stable`; ohne Gegenprüfung lehnt der Kern ab und der Grund steht auf der Seite |
+| Freigeben, Alle freigeben | wie `verify --by human:<kennung> --status stable`. Fehlt zum jetzigen Inhalt die Gegenprüfung, fragt das Dashboard je Seite nach; erst „Trotzdem freigeben“ gibt frei wie `--force`. Die Seite gilt dann nicht als gegengeprüft: Das Ereignis vermerkt „freigegeben ohne Gegenprüfung“, die Karte trägt die Marke „ohne Gegenprüfung“, der Lint meldet `human_without_check`. Abgelöste Karten lassen sich nicht freigeben |
 | Neue Karte | wie `new`; Pflichtfelder und Befunde zeigt der Lint nach dem Anlegen |
-| Abbildung einfügen | Befehl `abbildung` (Prüfung und Bereinigung des SVG im Kern) |
-| Vorschlag holen | Rolle „Bearbeiten per Prompt“ über `rollen.py auftrag`; gespeichert wird erst mit „Speichern“ |
+| Abbildung einfügen | Befehl `abbildung` (Prüfung und Bereinigung des SVG im Kern); auch als Entwurf eines Modells aus einer Beschreibung |
+| Vorschlag holen | Auftrag im Hintergrund, Rolle „Bearbeiten per Prompt“ über `rollen.py auftrag`; geschrieben wird erst mit „Annehmen“ oder „Speichern“ |
 
 Nach jedem Speichern läuft `rebuild`; die Antwort enthält die Lint-Befunde zur Seite. Jede Speicheranfrage trägt den
 Prüfwert der Datei (`hash`), den der Server beim Lesen mitgibt. Hat sich die Datei seither geändert, antwortet er mit
@@ -1010,9 +1167,42 @@ beschreiben“: „Vorschlag holen“ schickt den Text dieser einen Seite (nie e
 Verschwundene oder neue Fußnoten, verschwundene Links und Fußnoten ohne `sources`-Eintrag erscheinen als Warnung. Bei einer
 Quellenkarte prüft der Server vorher die Nutzungsrechte: Ist `ki_auswertung` „nicht erlaubt“, lehnt er mit 422 ab, bei „mit
 Auflage“ und „erst fragen“ gibt es eine Warnung; hinaus geht nur diese eine Seite, nie ein Volltext. „Annehmen“
-setzt den Vorschlag ins Textfeld, „Speichern“ ist ein eigener Schritt; das Ereignis nennt dann Rolle, Harness, Anbieter und
-Modell. Die Datenklasse des Wikis (`[rollen] daten`) und gesperrte Anbieter beachtet `rollen.py`; die Harness
+speichert den Vorschlag über denselben Weg wie „Speichern“ und antwortet mit 409, wenn sich die Seite seit dem Senden geändert hat. „Ins Textfeld“ setzt ihn nur ins
+Textfeld, „Speichern“ ist dann ein eigener Schritt. Das Ereignis nennt Rolle, Harness, Anbieter und Modell. Die Datenklasse des Wikis (`[rollen] daten`) und gesperrte Anbieter beachtet `rollen.py`; die Harness
 `sitzung` kann der Server nicht bedienen und meldet das klar.
+
+**Schaubild aus einer Beschreibung.** Der Dialog „Abbildung einfügen“ hat das Feld „Oder beschreiben“. Es läuft über die Rolle *Bearbeiten per Prompt*; hinaus geht nur die
+Beschreibung, weder die Seite noch eine Quelle. Das SVG des Modells durchläuft dieselbe Bereinigung wie ein hochgeladenes. Abgelegt wird es erst mit „Annehmen“, ein vorhandenes Bild ersetzt
+dieser Weg nie. Das Ereignis nennt das Modell, und die Bildunterschrift erhält „Mit KI erzeugt (Modell)“, auch in der Datei zum Weitergeben. Das Bild ist eine Illustration, kein Beleg. Ob das
+eine gesetzliche Kennzeichnungspflicht erfüllt, ist nicht geprüft.
+
+**Aufträge.** Ein Modellaufruf läuft im Hintergrund des Servers: Die Seite bleibt bedienbar, der Auftrag übersteht ein Neuladen, „Auftrag abbrechen“ beendet den
+Prozess samt Kindern, und je Rolle läuft einer zugleich. Offene Aufträge stehen unter „Aufträge“ in der Kopfzeile. Je Auftrag liegt eine JSON-Datei unter
+`<bundle>/.auftraege/`, mit eigener `.gitignore`, außerhalb von Seiten, Indexen, Lint und jedem Export. Sie enthält die Anweisung und den vorgeschlagenen Text, nicht den
+Schlüssel. Endet der Server während eines Laufs, gilt der Auftrag danach als abgebrochen; fertige Vorschläge bleiben und behalten ihre Modellherkunft. Erledigtes fällt
+nach 30 Tagen weg. Dateien in diesem Ordner gelten beim Laden als ungeprüft: Was nicht genau die erwartete Form hat, wird übergangen.
+
+**Quellen aufnehmen.** Ein PDF oder Markdown auf „Neue Karte“ ziehen oder eine DOI oder einen Link eingeben. `serve` zeigt zuerst die Rechte wie in `/lesen`: `ki_auswertung` und
+`volltext_ablegen` aus der Matrix des Wikis, dazu die Datenklasse und das Modell der Rolle `lesen`. Bei „bedingt“ oder „erst fragen“ braucht die KI-Auswertung einen Beleg, der als `rights` auf die Karte
+kommt; ohne Erlaubnis geht nur „Nur Karte ohne Modell“, das nichts sendet und auch mit der Rolle `sitzung` geht. Eine Lizenz, die eine Datei über sich selbst behauptet, ist nur ein Vorschlag.
+Fremde PDFs sind ungeprüfter Inhalt: `pdftotext` (Poppler) bekommt die Datei über die Standardeingabe und läuft in der Sandbox des Systems (macOS `sandbox-exec`, Linux `bwrap`), ohne Netz, ohne
+Benutzerordner, ohne Schreibrechte, mit Grenzen für Zeit und Speicher. Fehlt eines davon, wird nichts gelesen und es bleibt die Karte ohne Modell. Das Modell bekommt den Text sowie Kennung und Titel der
+Konzeptkarten, keine Werkzeuge. Seine Antwort sind Daten: Der Kern übernimmt nur bekannte Felder, setzt sie als reinen Text (keine Links, Bilder, Fußnoten, HTML), prüft jeden Anker am Original, ermittelt die
+Fundstelle selbst und streicht, was nicht wörtlich dasteht; beim Annehmen noch einmal am frisch gelesenen Original. Erst „Annehmen“ oder „Alle annehmen“ schreibt, immer als `status: draft`; eine Konzeptkarte nimmt ihre
+Quellenkarte mit. Das Original wartet bis zur Entscheidung unter `<bundle>/.auftraege/eingang/` (PDF bis 64 MB, Markdown bis 2 MB) und fällt danach weg, Liegengebliebenes nach einem Tag; bleibt das Ablegen erlaubt, liegt es dann unter
+`raw/<slug>/original/`. Ein Link wird nicht abgerufen: Webseiten gehen nur im Container, also bleibt es bei der Karte mit `resource`. Eine Datei ohne Kennung bekommt `urn:sha256:…` als `resource`.
+
+**Pfad.** „Neuer Pfad“ legt einen an, „Bearbeiten“ öffnet ihn: Stationen anlegen, umbenennen, umsortieren; Karten und Textfelder auf dem Raster ziehen
+und am Griff in der Größe ändern. Mit der Tastatur: Tab wählt ein Element, Pfeile verschieben, Umschalt und Pfeile ändern die Größe, Eingabe öffnet
+Text und Anzeige, Entf nimmt es heraus. „Als Text bearbeiten“ öffnet den gewöhnlichen Editor,
+auch für den Modellvorschlag: Nur der eigene Text des Pfads geht hinaus, die Datenklasse des Wikis gilt. Gespeichert wird in einem Zug (`POST /api/pfad`
+mit dem Hash aus `GET /api/pfad`): bei fremder Änderung 409, nichts geschrieben; ein Ereignis; der Körper ändert sich nur, wenn sich Text, Folge oder Notizen
+ändern. „Bearbeiten“ beim Pfad „Zuerst lesen“ ohne Datei fragt nach und legt erst dann `pfade/zuerst-lesen.md` an.
+
+**`tags` heißen hier „Suchbegriffe“.** Das Feld gehört zum OKF-Format (v0.2, §4.1, optional) und bleibt in den Dateien, auch was die Oberfläche nicht
+zeigt. In okfw wirkt es an zwei Stellen: als Marke für „Zuerst lesen“ im Root-Index und als Suchbegriff im Dashboard. Darum zeigen die Eigenschaften die Begriffe als
+Eingabe mit Kommas unter diesem Namen; `order` steht nur noch in der Ansicht
+„Ganzes Frontmatter als Text“. Weiter erscheinen Schlagwörter in keiner Lese- oder Übersichtsansicht.
 
 **Einstellungen** (Knopf oben, eigene Ansicht):
 
@@ -1039,15 +1229,19 @@ Schnittstelle des Servers (für Tests und Eigenbau; nur mit Cookie, schreibende 
 |---|---|
 | `GET /` | Dashboard, frisch gebaut, mit Bearbeiten |
 | `GET /api/seite?id=` · `POST /api/seite` | Seite lesen (Text, Frontmatter, Felder, `hash`, geschützte Felder) · speichern (`id`, `hash`, `body?`, `frontmatter?`, `vorschlag?`: `true` nach „Annehmen“, dann nennt das Ereignis die Rolle) |
-| `POST /api/neu` · `POST /api/freigabe` · `POST /api/abbildung` | neue Karte (`typ`, `slug`, `titel`, `beschreibung?`) · freigeben (`ids`) · Schaubild ablegen (`name`, `svg`) |
-| `POST /api/vorschlag` | Modellvorschlag zu `id` und `anweisung` (optional `body`: der Stand im Textfeld); speichert nichts |
+| `POST /api/neu` · `POST /api/freigabe` · `POST /api/abbildung` | neue Karte (`typ`, `slug`, `titel`, `beschreibung?`) · freigeben (`ids`) · Schaubild ablegen (`name`, `svg`, `ersetzen?`; mit `pruefen` nur die Auskunft mit bereinigter Fassung, Verlusten und freiem Namen; ein vorhandener Name ohne `ersetzen`: 409) |
+| `POST /api/auftrag` · `POST /api/auftrag/abbrechen` · `GET /api/auftraege` · `GET /api/auftrag?id=` | Auftrag im Hintergrund starten (`typ`, dazu die Felder des Typs; speichert nichts) · abbrechen · alle offenen · einer mit Vorschlag |
+| `POST /api/vorschlag/annehmen` · `POST /api/vorschlag/verwerfen` | Änderung eines Auftrags schreiben (`auftrag`, `aenderung`) · verwerfen |
+| `POST /api/quelle/datei` · `POST /api/quelle/klaeren` · `POST /api/quelle/karte` | Datei ablegen · Metadaten und Rechte zu Datei oder Kennung klären · Karte ohne Modell |
+| `GET /api/folgen?id=` · `POST /api/abloesen` · `POST /api/loeschen` · `GET /api/papierkorb` · `POST /api/wiederherstellen` | Folgen zeigen · ablösen · in den Papierkorb · Papierkorb · zurückholen |
+| `GET /api/pfad?id=` · `POST /api/pfad` · `POST /api/pfad/neu` · `POST /api/pfad/uebernehmen` | Pfad lesen · speichern · anlegen · aus „Zuerst lesen“ übernehmen |
 | `GET /api/einstellungen` · `POST /api/einstellungen/rolle` · `…/anbieter` · `…/person` · `GET /api/modelle?anbieter=` | Einstellungen |
 | `GET /api/design` · `POST /api/design` | Designdatei |
 
 Alle Routen liegen unter `/<präfix>/`; die Tabelle nennt sie ohne. Fehler kommen als JSON `{"fehler": "Klartext"}` mit passendem
-Code: 400 (kein gültiges JSON, kein Objekt), 403 (ohne Token, Cookie, Kopf oder Host), 404 (unbekannte Seite oder ein Pfad
-außerhalb des Präfixes), 409 (Datei geändert), 411 (ohne `Content-Length`), 413 (zu groß), 415 (nicht
-`Content-Type: application/json`), 422 (vom Kern abgelehnt), 500 (interner Fehler), 502 (Modell nicht erreichbar); eine
+Code: 400 (kein gültiges JSON, kein Objekt, fehlende oder unpassende Felder), 403 (ohne Token, Cookie, Kopf oder Host), 404 (unbekannte Seite, unbekannter Auftrag oder ein Pfad
+außerhalb des Präfixes), 409 (Datei geändert), 411 (ohne `Content-Length`), 413 (zu groß), 415 (falscher
+`Content-Type`), 422 (vom Kern abgelehnt), 500 (interner Fehler), 502 (Modell oder Literatur-API nicht erreichbar), 504 (Zeitlimit eines Aufrufs überschritten); eine
 andere Methode als GET und POST beantwortet die Standardbibliothek mit 501.
 
 ## Hooks (Claude Code)
@@ -1058,9 +1252,9 @@ laufen über `uv run --script`, `python3` braucht es nicht:
 | Ereignis | Aufruf (Plugin) | Wirkung |
 |---|---|---|
 | SessionStart | `uv run --no-config --quiet --script "${CLAUDE_PLUGIN_ROOT}/skills/okfw/hooks/okf_hook.py" session-start` → `okfw.py status --hook` | Stand des Wikis und geschützte Pfade als Kontext |
-| PreToolUse `Write\|Edit\|MultiEdit\|NotebookEdit` | `… okf_hook.py guard` | blockiert Ereignisprotokoll, `raw/`, Exporte, Dashboards (mit `[visibility]` auch das öffentliche), `index.md`/`log.md` im Bundle, `[paths] protected`; auf Wiki-Seiten Edit, MultiEdit und Write, die `status` oder `verified` ändern |
+| PreToolUse `Write\|Edit\|MultiEdit\|NotebookEdit` | `… okf_hook.py guard` | blockiert Ereignisprotokoll, `raw/`, Exporte, Dashboards (mit `[visibility]` auch das öffentliche), `index.md`/`log.md`, `.papierkorb` und `.auftraege` im Bundle, `[paths] protected`; auf Wiki-Seiten Edit, MultiEdit und Write, die `status`, `verified` oder `generated.modelle` ändern oder deren Frontmatter nicht in einfacher Form steht; bei kaputter `wiki.toml` jeden Schreibzugriff im Projekt außer auf sie selbst |
 | PostToolUse `Write\|Edit\|MultiEdit` | `… okf_hook.py post-edit` | hat das Werkzeug den Körper einer Seite im Bundle geändert (Vergleich mit dem Stand davor aus der Antwort von Claude Code; fehlt er, gilt der Körper als geändert): `okfw.py body <seite> --nachziehen` zieht `generated` nach, stable wie bei `body` (neue Seite: `--neu`, Ereignis `create`), und bittet Claude, die Datei vor dem nächsten Edit neu zu lesen; sonst Ereignis `write`/`edit` |
-| Stop | `… okf_hook.py stop` → `okfw.py rebuild --hook --befunde` | Projektionen nachziehen; Lint-Fehler gehen an die Sitzung zurück (`decision: block`, je Seite eine Zeile mit Regelname), höchstens zwei Runden je Sitzung, danach eine Zeile |
+| Stop | `… okf_hook.py stop` → `okfw.py rebuild --hook --befunde` | Projektionen nachziehen; Lint-Fehler gehen an die Sitzung zurück (`decision: block`, je Seite eine Zeile mit Regelname, höchstens 20), höchstens zwei Runden je Sitzung, danach eine Zeile |
 
 Nebenfall **Skill-Ordner** (`~/.claude/skills/okfw`, ohne Plugin): `hooks/settings.example.json` in die
 `.claude/settings.json` des Projekts übernehmen. Alle vier Hooks rufen dort wie im Plugin `okf_hook.py` über
@@ -1072,10 +1266,10 @@ einem übergeordneten Ordner gilt also auch für eine Sitzung in einem Unterordn
 aufwärts ab der Zieldatei (rund 30 ms, nur Standardbibliothek,
 Python ≥ 3.11 wegen `tomllib`, das uv bereitstellt). Er schützt dieselben Pfade, die `status --hook` als
 „Nicht direkt bearbeiten“ nennt (`protected_paths` im Kern). Für die Vertrauensfelder vergleicht er die
-Schlüssel `status` und `verified` im Frontmatter vor und nach der Änderung als Text (Edit und MultiEdit
+Schlüssel `status`, `verified` und `generated.modelle` im Frontmatter vor und nach der Änderung als Text (Edit und MultiEdit
 werden auf die Datei angewandt, Write bringt den ganzen Inhalt); jede Abweichung wird abgelehnt, nur eine neue Seite darf `status: draft` tragen.
 Schreibzugriffe über Bash erfasst er nicht, auch `okfw.py verify` nicht; das bleibt Regel, und dafür gibt es
-die Signatur. Bedienfehler (kaputte `wiki.toml`, `requires_core` neuer als der Kern, fehlendes `uv`) melden die Hooks als eine
+die Signatur. Bedienfehler (kaputte `wiki.toml`, `requires_core` neuer als der Kern, fehlendes `uv`) melden die Hooks außerhalb des Guard als eine
 Zeile (`systemMessage`), ebenso eine Zeitüberschreitung beim Sitzungsstart, beim
 Nachziehen und beim Stop. Ohne `wiki.toml` bleiben sie still.
 

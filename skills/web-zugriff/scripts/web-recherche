@@ -265,7 +265,7 @@ def pdf_urls_lesen(urls, domains):
         except ValueError:
             raise Abbruch(f"Ungültige URL: {url}", code=1)
         if (teile.scheme != "https" or port not in (None, 443) or teile.username or teile.password
-                or re.search(r"[\s\x00-\x1f\x7f]", url) or len(url) > 2000):
+                or re.search(r"[\s\x00-\x1f\x7f\\]", url) or len(url) > 2000):
             raise Abbruch(f"Nur https-URLs auf Port 443 ohne Zugangsdaten: {url}", code=1)
         if not teile.hostname or not freigegeben(teile.hostname, domains):
             raise Abbruch(f"{teile.hostname or url} steht nicht in --domains", code=1)
@@ -632,7 +632,8 @@ def container_laufen(cmd, stream_pfad, zeitlimit, name, eingabe=None, je_zeile=N
     groesse = 0
     try:
         with open(stream_pfad, "w", encoding="utf-8") as roh:
-            for zeile in proc.stdout:
+            # readline mit Grenze: auch eine Zeile ohne Zeilenumbruch bleibt unter dem Limit im Speicher
+            for zeile in iter(lambda: proc.stdout.readline(max_strom - groesse + 1), ""):
                 groesse += len(zeile)
                 if groesse > max_strom:
                     toeten("Ausgabestrom zu groß")
@@ -928,7 +929,7 @@ def cmd_pdf(args):
     try:
         if grund:
             raise Abbruch(f"PDF-Container abgebrochen: {grund}", code=124 if "Zeitlimit" in grund else 2)
-        details = [f"exit {code}", "stderr: " + re.sub(r"[^\x20-\x7e]", "?", fehlertext.strip())[-300:]]
+        details = [f"exit {code}"]  # kein stderr: der Text hängt vom PDF ab und käme ungeprüft in die Sitzung
         dokumente = pdf_bericht_lesen(stream, urls, domains, details)
         eintrag["pdf"] = dokumente
         if code != 0:

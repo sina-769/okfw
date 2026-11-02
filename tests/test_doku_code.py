@@ -3,6 +3,7 @@
 import json
 import shutil
 import unittest
+from pathlib import Path
 
 from .hilfe import SKILL, WikiTest
 
@@ -15,6 +16,19 @@ hidden = ["intern"]
 [export.csl]
 path = "build/references.json"
 """
+
+
+class TestordnerOhneBerichte(unittest.TestCase):
+    """Auch git-ignorierte Dateien: Berichte hängen am Release, Probedateien gehören in ein Wegwerf-Wiki."""
+
+    def md_in(self, ordner: Path) -> list[str]:
+        return sorted(p.relative_to(ordner).as_posix() for p in ordner.rglob("*.md"))
+
+    def test_nur_die_anleitungen_liegen_hier(self):
+        self.assertEqual(self.md_in(Path(__file__).resolve().parent), ["angreifer.md", "selbstreview.md"])
+
+    def test_bei_den_tests_von_web_zugriff_liegt_keine(self):
+        self.assertEqual(self.md_in(Path(__file__).resolve().parents[1] / "skills" / "web-zugriff" / "scripts" / "tests"), [])
 
 
 class GuardWieProtectedPaths(WikiTest):

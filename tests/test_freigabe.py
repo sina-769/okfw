@@ -5,7 +5,7 @@ import json
 
 from .hilfe import WikiTest
 
-ACTOR = "claude-code/claude-opus-5-5"   # [wiki] actor im Profil default
+ACTOR = "claude-code/unknown"   # [wiki] actor im Profil default
 TEXT = "# Konzept\n\nDas Format verlangt nur `type`.[^q1]\n\n[^q1]: [Quelle q1](/sources/q1.md), Abschn. 4\n"
 
 

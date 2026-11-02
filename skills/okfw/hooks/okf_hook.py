@@ -5,7 +5,7 @@
 """Claude-Code-Hooks für okfw, nur Standardbibliothek (läuft bei jedem Write/Edit).
 
   okf_hook.py guard          PreToolUse: blockiert Schreibzugriffe auf Rohquellen, Ereignisprotokoll und Projektionen
-                             sowie Edit/Write, die auf einer Wiki-Seite status oder verified ändern
+                             sowie Edit/Write, die auf einer Wiki-Seite status, verified oder generated.modelle ändern
   okf_hook.py post-edit      PostToolUse: hat ein Write/Edit den Körper einer Wiki-Seite geändert, zieht
                              `okfw.py body --nachziehen` generated nach (stable wie bei body; neue Seite:
                              `--neu`, Ereignis create); sonst nur ein Ereignis
@@ -84,6 +84,7 @@ def load(path: Path):
             "raw": im_projekt(root, paths["raw"], "[paths] raw") if paths.get("raw") else None,
             "exports": {(root / p).resolve() for p in generated_outputs(cfg)},
             "protected": protected,
+            "actor": wiki.get("actor", "claude-code/unknown"),
         }
     except (OSError, ValueError, TypeError, AttributeError, RecursionError) as exc:   # TOMLDecodeError ist ein ValueError
         raise ConfigError(f"{config} nicht lesbar ({exc})") from exc
@@ -148,6 +149,10 @@ def reason_for(ctx: dict, path: Path):
         return f"{rel} ist das Ereignisprotokoll (nur anhängen). Ereignisse mit `{tool} event` oder `verify` schreiben."
     if ctx["raw"] and unter(path, ctx["raw"]):
         return f"{rel} ist eine unveränderliche Rohquelle. Neue Quellen mit `{tool} capture`, neue Fassung als <slug>-v2."
+    if unter(path, ctx["bundle"] / ".papierkorb"):
+        return f"{rel} liegt im Papierkorb. Zurückholen mit `{tool} restore`."
+    if unter(path, ctx["bundle"] / ".auftraege"):
+        return f"{rel} ist ein Vorschlag von `{tool} serve`. Annehmen oder verwerfen im Dashboard."
     if falt(path) in {falt(p) for p in ctx["exports"]}:
         return f"{rel} ist ein generierter Export. Die Quellenkarten ändern, dann `{tool} rebuild`."
     if unter(path, ctx["bundle"]) and path.name.casefold() in RESERVED:
@@ -175,6 +180,28 @@ def frontmatter_unklar(frontmatter: str) -> bool:
     if any(keys.count(k) > 1 for k in TRUST_KEYS):
         return True
     return any(not re.match(r"[A-Za-z_\-\s]", z) for z in lines)
+
+
+def modelle_block(text: str) -> str:
+    """Unterschlüssel generated.modelle als Text, wie trust_blocks ohne PyYAML: Die Herkunft einer Seite ändert nur der Kern."""
+    lines = (frontmatter_of(text) or "").splitlines()
+    for i, line in enumerate(lines):
+        if not re.match(r"generated\s*:", line):
+            continue
+        for j in range(i + 1, len(lines)):
+            if not lines[j].startswith((" ", "\t")) and lines[j].strip():
+                return ""
+            key = re.match(r"([ \t]+)modelle\s*:", lines[j])
+            if key:
+                block = [lines[j].rstrip()]
+                for folge in lines[j + 1:]:
+                    tiefe = len(folge) - len(folge.lstrip())
+                    if folge.strip() and not (tiefe > len(key.group(1)) or (tiefe == len(key.group(1)) and folge.lstrip().startswith("- "))):
+                        break
+                    if folge.strip():
+                        block.append(folge.rstrip())
+                return "\n".join(block)
+    return ""
 
 
 def trust_blocks(text: str) -> dict:
@@ -228,6 +255,9 @@ def trust_reason(ctx: dict, path: Path, event: dict):
     if neu is not None and neu != frontmatter_of(alt) and frontmatter_unklar(neu):
         return (f"{rel}: Frontmatter nur in einfacher Form schreiben, Schlüssel ohne Anführungszeichen, ohne Flussform, "
                 "ohne Einrückung, sonst lässt sich nicht erkennen, ob status oder verified sich ändern.")
+    if modelle_block(alt) != modelle_block(after):
+        return (f"{rel}: generated.modelle hält fest, welches Modell am Text beteiligt war; das schreibt nur der Kern. "
+                "Den Text mit Edit oder `body` ändern, die Datei vorher neu lesen, und den Block so lassen, wie er steht.")
     before = trust_blocks(alt)
     after = trust_blocks(after)
     if not path.is_file() and re.fullmatch(r"status:\s*[\"']?draft[\"']?", after.get("status", "status: draft")):
@@ -287,14 +317,54 @@ def text_before(event: dict):
     return "" if response.get("type") == "create" else None
 
 
-def pull_generated(ctx: dict, page: str, tool: str, new: bool = False) -> bool:
-    """Körper geändert: generated über den Kern nachziehen (Akteur aus [wiki] actor, stable wie bei body).
+def transkript_modell(event: dict) -> str:
+    """Das Modell, das eben geschrieben hat, aus dem Transkript der Sitzung (der Hook bekommt es nicht mitgeliefert,
+    geprüft mit Claude Code 2.1.x). Lieber leer als das Modell der Hauptsitzung für einen Subagenten."""
+    pfad = event.get("transcript_path")
+    if not isinstance(pfad, str) or not pfad:
+        return ""
+    datei = Path(pfad)
+    if event.get("agent_id"):
+        datei = datei.with_suffix("") / "subagents" / f"agent-{event['agent_id']}.jsonl"
+    try:
+        with datei.open("rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 1_000_000))
+            zeilen = f.read().splitlines()
+    except OSError:
+        return ""
+    for zeile in reversed(zeilen):   # nur Antworten des Modells; Werkzeugausgaben können alles enthalten
+        try:
+            eintrag = json.loads(zeile)
+        except ValueError:
+            continue
+        nachricht = eintrag.get("message") if isinstance(eintrag, dict) and eintrag.get("type") == "assistant" else None
+        modell = nachricht.get("model") if isinstance(nachricht, dict) else None
+        if isinstance(modell, str) and re.fullmatch(r"[\w.:-]+", modell):
+            return modell
+    return ""
+
+
+def akteur_umgebung(ctx: dict, event: dict) -> dict | None:
+    """WIKI_ACTOR für den Kern: das Modell aus dem Transkript, wenn der Akteur sonst Claude Code mit fest eingetragenem
+    oder ohne Modell wäre. Auch ein eingetragener human:<id> träfe hier nicht zu, denn diesen Schreibzugriff hat die
+    Sitzung gemacht. Ein gesetztes WIKI_ACTOR und andere Akteure (eigene Abläufe) bleiben."""
+    akteur = str(ctx.get("actor", "claude-code/unknown"))
+    if os.environ.get("WIKI_ACTOR") or not akteur.startswith(("claude-code/", "human:")):
+        return None
+    modell = transkript_modell(event) or ("unknown" if akteur.startswith("human:") else "")
+    return {**os.environ, "WIKI_ACTOR": f"claude-code/{modell}"} if modell else None
+
+
+def pull_generated(ctx: dict, page: str, tool: str, new: bool = False, event: dict | None = None) -> bool:
+    """Körper geändert: generated über den Kern nachziehen (Akteur aus Transkript oder [wiki] actor, stable wie bei body).
     Der Kern schreibt das Ereignis update, für eine neue Seite create; False, wenn er nicht lief (dann bleibt es
     beim Ereignis des Hooks)."""
     try:
         # Optionen voran und "--" vor der Seite: Ein Seitenname, der mit "-" beginnt, wäre sonst eine Option
         done = run_core(ctx["root"], "body", "--nachziehen", *(["--neu"] if new else []),
-                        "--detail", f"{tool} über Claude Code", "--", page, timeout=15)
+                        "--detail", f"{tool} über Claude Code", "--", page, timeout=15,
+                        env=akteur_umgebung(ctx, event or {}))
     except subprocess.TimeoutExpired:
         notice(f"generated von {page} nach 15 s nicht nachgezogen; `body {page} --nachziehen` von Hand.")
         return False
@@ -331,7 +401,7 @@ def post_edit(event: dict) -> None:
     before = text_before(event)
     if path.is_file() and (before is None or body_of(before) != body_of(path.read_text(encoding="utf-8",
                                                                                          errors="replace"))):
-        if pull_generated(ctx, page, tool, new=before == ""):
+        if pull_generated(ctx, page, tool, new=before == "", event=event):
             return
     record = {
         "ts": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -353,12 +423,12 @@ def project_root(event: dict):
     return config.parent if config else None
 
 
-def run_core(root: Path, *args: str, timeout: int) -> subprocess.CompletedProcess | None:
+def run_core(root: Path, *args: str, timeout: int, env: dict | None = None) -> subprocess.CompletedProcess | None:
     uv = shutil.which("uv")
     if uv is None:
         return None
     return subprocess.run([uv, "run", "--no-config", "--quiet", "--script", str(CORE), "--root", str(root), *args],
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, text=True, timeout=timeout, env=env)
 
 
 def core_failed(step: str, done: subprocess.CompletedProcess) -> str:

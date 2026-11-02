@@ -24,6 +24,19 @@ BOESE = ('<?xml version="1.0" encoding="UTF-8"?>'
          'fill="url(#ok)" stroke="red"/>'
          '<use xlink:href="http://evil.example/z#a"/><use xlink:href="#ok"/>'
          '<text x="1" y="2">sichtbar <tspan>auch</tspan> &lt;script&gt;</text></svg>')
+KOPF = '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">'
+ILLUSTRATOR = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><defs><style>'
+               '.cls-1{fill:#f00;stroke:#000;}/* Kommentar */ .cls-2,.cls-3{fill:url(#verlauf);} rect.cls-4{fill:#00f}'
+               '#mitte{opacity:.5} circle{stroke-width:3} *{stroke-linecap:round}</style>'
+               '<linearGradient id="verlauf"><stop offset="0" stop-color="#c00"/></linearGradient></defs>'
+               '<rect class="cls-1" width="1" height="1"/><rect class="cls-2 unbekannt" width="2" height="2"/>'
+               '<rect class="cls-4 cls-1" id="mitte" width="3" height="3" style="stroke:#0f0"/><circle r="4" fill="#111"/></svg>')
+DRAWIO = ('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="121px" height="61px" '
+          'viewBox="-0.5 -0.5 121 61" content="&lt;mxfile/&gt;"><g><rect width="120" height="60" fill="#fff" pointer-events="all"/>'
+          '<g transform="translate(-0.5 -0.5)"><switch><foreignObject requiredFeatures="x" width="100%" height="100%">'
+          '<div xmlns="http://www.w3.org/1999/xhtml">HTML-TEXT</div></foreignObject><text x="60" y="34">Start</text>'
+          '<text x="1" y="1">Zweite Wahl</text></switch></g></g><switch><g requiredFeatures="x"/>'
+          '<a xlink:href="https://www.drawio.com/x"><text>Text is not SVG</text></a></switch></svg>')
 SEITE = ("Satz mit Beleg.[^mueller]\n\n![Ablauf](/abbildungen/{name}.svg)\n"
          "*Abb.: Der Ablauf. Eigene Darstellung nach Müller[^mueller].*\n\n[^mueller]: [Quelle](/sources/mueller.md), S. 4\n")
 
@@ -82,6 +95,7 @@ class AbbildungBefehl(Grundlage):
     def test_doctype_entity_kein_viewbox_kein_svg_werden_abgelehnt(self):
         faelle = {
             "doctype": '<!DOCTYPE svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>',
+            "doctype-subset": f'{KOPF[:-1]} [<!ENTITY x "y">]><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>',
             "entity": '<!ENTITY x "y"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>',
             "ohne-viewbox": '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>',
             "html": '<html xmlns="http://www.w3.org/1999/xhtml"><body/></html>',
@@ -104,11 +118,94 @@ class AbbildungBefehl(Grundlage):
         self.assertIn('xmlns="http://www.w3.org/2000/svg"', text)
         self.assertIn('viewBox="0 0 120 60"', text)
 
+    def test_standardkopf_wie_aus_illustrator(self):
+        quelle = ('<?xml version="1.0" encoding="utf-8"?>\n<!-- Generator: Adobe Illustrator 27.0 -->\n' + KOPF + "\n"
+                  '<svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" xml:space="preserve"><rect/></svg>')
+        self.core("abbildung", "kopf", "--file", str(self.datei("k.svg", quelle)))
+        text = (self.root / "wiki" / "abbildungen" / "kopf.svg").read_text(encoding="utf-8")
+        self.assertNotIn("DOCTYPE", text)
+        self.assertNotIn("w3.org/Graphics", text)
+
+    def test_einheiten_ergeben_viewbox_und_sonst_klare_meldung(self):
+        for breite, hoehe, erwartet in (("10mm", "1in", "0 0 37.795 96"), ("72pt", "6pc", "0 0 96 96"), ("2.54cm", " 96PX ", "0 0 96 96"),
+                                        (".5in", "40Q", "0 0 48 37.795"), ("120", "60.5", "0 0 120 60.5")):
+            with self.subTest(breite=breite):
+                r = self.py(f"result = okfw.clean_svg({f'<svg width="{breite}" height="{hoehe}"/>'!r})[0]")
+                self.assertIn(f'viewBox="{erwartet}"', r)
+        for breite in ("100%", "10em", "0", "1e3", "-5", "auto", "9" * 400):
+            with self.subTest(breite=breite[:8]):
+                done = self.core("abbildung", "einheit", "--file", str(self.datei("e.svg", f'<svg width="{breite}" height="10"/>')), ok=False)
+                self.assertEqual(done.returncode, 2)
+                self.assertIn('viewBox="0 0 Breite Höhe" ergänzen', done.stderr)
+
+    def test_verlust_auf_stderr_mit_erklaerung(self):
+        done = self.core("abbildung", "verlust", "--file", str(self.datei("v.svg", DRAWIO)))
+        self.assertIn("Element foreignObject", done.stderr)
+        self.assertIn("Ersatztext", done.stderr)
+
     def test_guard_erlaubt_schreiben_in_abbildungen(self):
         for name in ("abbildungen/x.svg", "abbildungen/notiz.md"):
             done = self.hook("guard", {"hook_event_name": "PreToolUse", "tool_name": "Write", "cwd": str(self.root),
                                        "tool_input": {"file_path": str(self.root / "wiki" / name), "content": SVG}})
             self.assertNotIn("deny", done.stdout, name)
+
+
+class Stilregeln(Grundlage):
+    def sauber(self, svg: str, prefix: str = "") -> tuple[str, list[str]]:
+        return self.py(f"result = okfw.clean_svg({svg!r}, prefix={prefix!r})")
+
+    def test_regeln_landen_im_style_attribut_wie_im_browser(self):
+        text, entfernt = self.sauber(ILLUSTRATOR, "p-")
+        self.assertNotIn("<style", text)
+        self.assertNotIn("class=", text)
+        self.assertEqual(entfernt, [])
+        self.assertIn('<rect width="1" height="1" style="stroke-linecap:round;fill:#f00;stroke:#000" />', text)
+        self.assertIn('style="stroke-linecap:round;fill:url(#p-verlauf)"', text)
+        # Gewicht vor Reihenfolge: * < Element < .klasse < Element.klasse < #id < eigenes style
+        self.assertIn('id="p-mitte" width="3" height="3" style="stroke-linecap:round;fill:#f00;stroke:#000;fill:#00f;opacity:.5;stroke:#0f0"', text)
+        self.assertIn('fill="#111" style="stroke-linecap:round;stroke-width:3"', text)
+
+    def test_abgelegte_datei_bleibt_beim_zweiten_bereinigen_gleich(self):
+        einmal = self.sauber(ILLUSTRATOR)[0]
+        self.assertEqual(self.sauber(einmal), [einmal, []])
+
+    def test_nicht_uebertragbares_wird_genannt(self):
+        text, entfernt = self.sauber('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><style>g .a{fill:red}.b,.c.d{fill:blue}'
+                                     '@media print{.b{fill:green}}</style><style media="print">.b{fill:pink}</style>'
+                                     '<rect class="a"/><rect class="b"/><rect class="c d"/></svg>')
+        self.assertEqual(text.count('style="fill:blue"'), 1)
+        for fehlt in ("red", "green", "pink"):
+            self.assertNotIn(fehlt, text)
+        self.assertEqual(entfernt, ["Stilregeln mit media", "Stilregeln nicht übertragen (3): g .a, .c.d, @media print"])
+
+    def test_text_hinter_style_bleibt(self):
+        text = self.sauber('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><text>vor<style>.a{fill:red}</style>nach</text></svg>')[0]
+        self.assertIn(">vornach</text>", text)
+
+    def test_verborgene_ebene_bleibt_verborgen(self):
+        text = self.sauber('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><g style="display:none"><rect/></g></svg>')[0]
+        self.assertIn('style="display:none"', text)
+
+    def test_switch_wird_zur_gruppe_mit_der_ersten_alternative(self):
+        text, entfernt = self.sauber(DRAWIO)
+        self.assertNotIn("switch", text)
+        self.assertNotIn("HTML-TEXT", text)
+        self.assertNotIn("Zweite Wahl", text)
+        self.assertNotIn("Text is not SVG", text)
+        self.assertIn(">Start</text>", text)
+        self.assertIn("Element foreignObject", entfernt)
+        self.assertNotIn("Element a", entfernt)   # stand hinter der ersten Alternative, der Browser zeichnet sie nie
+
+    def test_verlust_trennt_sichtbares_von_werkzeugangaben(self):
+        r = self.py("""result = okfw.svg_verlust(['Attribut version', 'Attribut space (fremder Namensraum)', 'Element namedview (fremder Namensraum)',
+    'Element metadata', 'Stil -inkscape-font-specification', 'Stil enable-background', 'Attribut data-name', 'Element image', 'Element foreignObject',
+    'Stil position', 'Attribut filter', 'Element mask', 'Stilregeln nicht übertragen (1): g .a'])""")
+        self.assertEqual(r["sichtbar"], ["Element image", "Element foreignObject", "Stil position", "Attribut filter", "Element mask",
+                                         "Stilregeln nicht übertragen (1): g .a"])
+        self.assertEqual(len(r["ohne_wirkung"]), 7)
+        self.assertEqual(len(r["hinweise"]), 3)
+        self.assertEqual(self.py("result = okfw.svg_verlust(['Attribut version'])")["hinweise"], [])
+        self.assertTrue(self.py("result = okfw.svg_verlust(['Element mask'])")["hinweise"])   # Unbekanntes zählt als sichtbar
 
 
 class Bereinigung(Grundlage):

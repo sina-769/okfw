@@ -666,7 +666,7 @@ class Pfade(unittest.TestCase):
         self.assertEqual(aus.getvalue(), "")   # nichts halb ausgegeben
 
     def test_fundweg_arten_wie_im_kern(self):
-        kern = (Path(api.KERN_PFAD)).read_text(encoding="utf-8")
+        kern = (Path(api.KERN_PFAD).parent / "okfw_kern" / "konfig.py").read_text(encoding="utf-8")
         ausschnitt = kern[kern.index("FUNDWEG_ARTEN = {"):].split("}", 1)[0]
         self.assertEqual(tuple(sorted(api.FUNDWEG_ARTEN)), tuple(sorted(
             re.findall(r'"([a-z]+)":', ausschnitt))))

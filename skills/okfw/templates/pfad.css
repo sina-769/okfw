@@ -1,0 +1,148 @@
+/* okfw Pfad: Lesen und Vortrag, im Dashboard und in der Datei aus `pfad export`. Nutzt die :root-Variablen der Vorlage. */
+body.pf-offen-body { overflow: hidden; }
+.pf-schicht { position: fixed; inset: 0; z-index: 45; background: var(--page); color: var(--ink); overflow-y: auto; outline: none; }
+.pf-leiste { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px; }
+.pf-sp { flex: 1; }
+.pf-titel { font-family: var(--font-heading); font-variation-settings: "opsz" 96; font-weight: 700; font-size: 20px; letter-spacing: -.015em; overflow-wrap: anywhere; }
+.pf-hinweis { font-size: 12px; color: var(--muted); }
+.pf-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.pf-kasten { max-width: 40rem; margin: 10vh auto 0; background: var(--surface); border: 0; border-radius: 22px; padding: 18px 20px; }
+.pf-kasten h2 { margin: 0 0 8px; }
+.pf-kasten .pf-leiste { padding: 8px 0 0; }
+
+/* Karten und Textfelder */
+.pf-flaeche { display: grid; grid-template-columns: repeat(var(--spalten, 12), minmax(0, 1fr)); gap: clamp(10px, 1.4vw, 16px); }
+.pf-karte { background: var(--surface); border: 0; border-radius: 18px; padding: clamp(14px, 1.8vw, 22px); min-width: 0; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+.pf-karte h3 { font-family: var(--font-heading); font-weight: 700; font-size: clamp(21px, 2vw, 26px); margin: 0; overflow-wrap: anywhere; line-height: 1.1; letter-spacing: -.018em; color: var(--ink); }
+.pf-karte p { margin: 0; }
+.pf-kopf { align-self: flex-start; font: 700 11.5px var(--font-body); background: var(--ink); color: var(--page); padding: 2px 10px; border-radius: 999px; }
+.pf-besch { color: var(--ink-2); font-size: 15px; line-height: 1.4; }
+.pf-koerper { min-height: 0; overflow-wrap: anywhere; }
+.pf-koerper > p { color: var(--ink); font-size: 15px; line-height: 1.5; }
+.pf-koerper .prose-content { font-size: 15px; line-height: 1.5; }
+.pf-koerper .prose-content p, .pf-koerper .prose-content li { line-height: 1.5; }
+.pf-zeigt-ganz .pf-koerper { overflow-y: auto; flex: 1; }
+.pf-lit { font-size: .85em; color: var(--ink-2); padding-left: 18px; margin: 8px 0 0; }
+.pf-stand { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: auto; padding-top: 6px; }
+.pf-ab { font: 700 11.5px var(--font-body); padding: 1px 9px; border-radius: 999px; border: 2px solid var(--border); }
+.pf-ab-geprueft { border-color: var(--c2); color: var(--c2); }
+.pf-ab-entwurf, .pf-ab-veraltet { border-color: var(--warning); background: color-mix(in srgb, var(--warning) 22%, transparent); color: var(--ink); }
+.pf-ab-widerspruch, .pf-ab-abgeloest { border-color: var(--c4); background: color-mix(in srgb, var(--c4) 22%, transparent); color: var(--ink); }
+.pf-fehlt { border: 2px dashed var(--c4); }
+.pf-auf { align-self: flex-start; margin-top: 6px; padding: 4px 14px; font-size: 13px; }
+.pf-text { min-width: 0; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+.pf-text .prose-content, .pf-text .prose-content p { font-size: clamp(19px, 2vw, 24px); line-height: 1.28; font-weight: 500; }
+.pf-text .prose-content > :last-child { margin-bottom: 0; }
+.pf-vermerk { font: 500 12px var(--font-body); color: var(--muted); }
+.pf-text .pf-vermerk { margin-top: 6px; }
+
+/* Lesen */
+.pf-spalte { max-width: 72rem; margin: 0 auto; padding: 0 clamp(16px, 3vw, 40px) 96px; }
+.pf-spalte > .pf-besch { margin: 32px 0 0 clamp(44px, 6vw, 72px); font-size: clamp(18px, 2vw, 22px); font-weight: 500; color: var(--ink-2); }
+.pf-station { margin-top: 0; position: relative; padding: clamp(32px, 5vw, 56px) 0 clamp(16px, 2vw, 24px) clamp(44px, 6vw, 72px); }
+.pf-station::before { content: ""; position: absolute; left: clamp(7px, 1.4vw, 15px); top: 0; bottom: 0; width: clamp(6px, 1vw, 10px); background: var(--linie); }
+.pf-station h2 { font-family: var(--font-heading); font-weight: 800; font-size: clamp(32px, 5vw, 62px); margin: 0 0 12px; overflow-wrap: anywhere; line-height: 1.04; letter-spacing: -.008em; margin-bottom: clamp(18px, 3vw, 32px); }
+.pf-nr { font: 700 14px var(--font-body); color: var(--ink); position: relative; margin-bottom: 6px; }
+.pf-nr::before { content: ""; position: absolute; left: calc(-1 * clamp(44px, 6vw, 72px) + clamp(0px, .55vw, 5px)); top: 50%; translate: 0 -50%; width: clamp(20px, 2.4vw, 30px); height: clamp(20px, 2.4vw, 30px); border-radius: 50%; background: var(--haltestelle); border: clamp(4px, .55vw, 6px) solid var(--ink); box-sizing: border-box; }
+.pf-lesen .pf-flaeche { grid-auto-rows: auto; }
+.pf-lesen .pf-leiste { position: sticky; top: 0; background: var(--schild); border-bottom: 6px solid var(--linie); z-index: 1; color: var(--auf-schild); }
+.pf-lesen .pf-leiste .ghost { border-color: currentColor; }
+.pf-lesen .pf-leiste .ghost:hover { background: var(--linie); color: var(--on-accent); border-color: var(--linie); }
+@media (max-width: 700px) {
+  .pf-lesen .pf-flaeche { display: flex; flex-direction: column; }
+}
+
+/* Vortrag: festes Bild 16:9, Maße in Container-Einheiten, damit Bildschirm und Druck gleich aussehen */
+.pf-vortrag { display: flex; flex-direction: column; background: var(--schild); color: var(--auf-schild); }
+.pf-ort { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; container-type: size; }
+.pf-buehne { box-sizing: border-box; width: min(100cqw, calc(100cqh * 16 / 9)); aspect-ratio: 16 / 9; background: var(--accent); border: 0; padding: 3.4cqmin 3.6cqmin; display: flex; flex-direction: column; gap: 2.2cqmin; font-size: 2.6cqmin; overflow: hidden; color: var(--on-accent); border-radius: 1.4cqmin; }
+.pf-buehne > h2 { font-family: var(--font-heading); font-weight: 800; font-size: 3.1em; margin: 0; overflow-wrap: anywhere; line-height: 1.02; letter-spacing: -.008em; }
+.pf-buehne .pf-flaeche { flex: 1; min-height: 0; grid-template-rows: repeat(var(--zeilen, 7), minmax(0, 1fr)); gap: 1.4cqmin; }
+.pf-buehne .pf-karte { background: var(--surface); padding: 1.6cqmin 1.9cqmin; color: var(--ink); border-radius: 1.4cqmin; gap: .7cqmin; }
+.pf-buehne .pf-vermerk { font-size: .62em; }
+.pf-fuss { font: 700 .62em var(--font-body); color: var(--on-accent); }
+.pf-notiz { background: var(--surface); border-top: 1px solid var(--border); padding: 10px 16px; max-height: 26vh; overflow-y: auto; white-space: pre-wrap; }
+.pf-notiz p { margin: 0 0 8px; }
+.pf-notizknoepfe { display: inline-flex; gap: 8px; }
+.pf-notizknoepfe[hidden] { display: none; }
+.pf-vortrag:fullscreen .pf-leiste { display: none; }
+.pf-vortrag:fullscreen .pf-ort { padding: 0; }
+.pf-vortrag:fullscreen.pf-mit-notiz .pf-notiz { display: block; }
+@media (max-width: 700px) { .pf-hinweis { display: none; } }
+
+/* Abschnitt im Dashboard */
+#pfade { background: none; padding: 0; margin-bottom: clamp(36px, 5vw, 64px); }
+.pfade-liste { list-style: none; margin: 8px 0 0; padding: 0; margin-top: 18px; position: relative; }
+.pfade-liste li { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; padding: 16px 0 16px 46px; border-top: 0; position: relative; }
+.pfade-liste li::before { content: ""; position: absolute; left: 11px; top: 0; bottom: 0; width: 8px; background: var(--linie); }
+.pfade-liste li:first-child::before { top: 26px; }
+.pfade-liste li:last-child::before { bottom: calc(100% - 34px); }
+.pfade-liste li::after { content: ""; position: absolute; left: 3px; top: 21px; width: 24px; height: 24px; border-radius: 50%; background: var(--haltestelle); border: 5px solid var(--ink); box-sizing: border-box; }
+.pfade-liste .pf-info strong { display: block; font-family: var(--font-heading); font-weight: 700; font-size: clamp(20px, 2.2vw, 28px); line-height: 1.12; letter-spacing: -.015em; }
+.pfade-liste .pf-info { flex: 1 1 14rem; min-width: 0; overflow-wrap: anywhere; }
+.pfade-liste .pf-info small { display: block; color: var(--ink-2); margin-top: 4px; font-size: 14px; }
+.pfade-liste .pf-tun { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Vortrag: das Plakat in der Akzentfarbe, die Karten auf eigener Fläche */
+.pf-vortrag .pf-leiste .ghost { border-color: currentColor; color: inherit; }
+.pf-vortrag .pf-leiste .ghost:hover { background: var(--linie); color: var(--on-accent); border-color: var(--linie); }
+.pf-vortrag .pf-hinweis { color: color-mix(in srgb, var(--auf-schild) 75%, transparent); }
+/* Nur Titel und Beschreibung: so hoch wie der Inhalt, keine leere Fläche */
+.pf-buehne .pf-zeigt-kurz { align-self: start; max-height: 100%; }
+.pf-buehne .pf-kopf { background: var(--ink); color: var(--surface); font-size: .56em; padding: .1em .8em; }
+.pf-buehne .pf-karte h3 { font-size: 1.2em; }
+.pf-buehne .pf-besch { font-size: .76em; }
+.pf-buehne .pf-koerper > p, .pf-buehne .pf-koerper .prose-content { font-size: .78em; line-height: 1.32; }
+.pf-buehne .pf-text, .pf-buehne .pf-text .prose-content, .pf-buehne .pf-text .prose-content p, .pf-buehne .pf-text a, .pf-buehne .pf-vermerk { color: var(--on-accent); }
+.pf-buehne .pf-text a { text-decoration-color: currentColor; }
+.pf-buehne .pf-text .prose-content, .pf-buehne .pf-text .prose-content p { font-size: 1.1em; line-height: 1.2; font-weight: 500; }
+.pf-buehne .pf-ab { font-size: .56em; }
+
+@media (max-width: 700px) {
+  .pfade-liste .pf-tun { width: 100%; }
+  .pf-buehne { padding: 5cqmin; gap: 3cqmin; }
+  .pf-buehne .pf-karte { padding: 3.5cqmin 4cqmin; }
+  .pf-buehne > h2 { font-size: 2.3em; }
+  .pf-buehne .pf-flaeche { gap: 2.4cqmin; }
+  .pf-buehne .pf-kopf, .pf-buehne .pf-ab { font-size: .62em; }
+}
+/* Vortrag am Telefon: hochkant füllt die Bühne den Schirm, gedruckt bleibt 16:9 */
+@media screen and (max-width: 700px) and (orientation: portrait) {
+  .pf-buehne { width: 100cqw; height: 100cqh; aspect-ratio: auto; font-size: 4.3cqmin; overflow-y: auto; }
+  .pf-buehne .pf-flaeche { display: flex; flex-direction: column; flex: none; gap: 3cqmin; }
+  .pf-ort { padding: 0; }
+}
+
+/* Bewegung: pfad.js setzt die Bühne bei jedem Schritt neu ein, die Animation läuft darum von selbst */
+@media screen and (prefers-reduced-motion: no-preference) {
+  .pf-buehne { animation: okfw-blende var(--okfw-dauer) var(--okfw-kurve) both; }
+  .pf-buehne .pf-flaeche > * { animation: okfw-rein var(--okfw-dauer) var(--okfw-kurve) both; }
+  .pf-buehne .pf-flaeche > :nth-child(2) { animation-delay: .07s; }
+  .pf-buehne .pf-flaeche > :nth-child(3) { animation-delay: .14s; }
+  .pf-buehne .pf-flaeche > :nth-child(n+4) { animation-delay: .21s; }
+  .pf-schicht { animation: okfw-blende .22s ease-out both; }
+  .pf-karte { transition: box-shadow .2s ease, transform .2s var(--okfw-kurve); }
+  /* Beim Scrollen kommen Stationen herein; ohne diese Technik sind sie einfach da */
+  @supports (animation-timeline: view()) {
+    .pf-lesen .pf-station { animation: okfw-scroll linear both; animation-timeline: view(); animation-range: entry 0% entry 38%; }
+  }
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .pf-lesen .pf-karte:hover { transform: translateY(-3px); box-shadow: 0 12px 30px var(--shadow); }
+}
+@keyframes okfw-blende { from { opacity: 0; } to { opacity: 1; } }
+@keyframes okfw-scroll { from { opacity: .25; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+
+/* Druck: je Station eine Seite. Nur wenn die Vortragsansicht den Druck ausgelöst hat. */
+.pf-druck { display: none; }
+@media print {
+  @page { size: 297mm 167mm; margin: 0; }
+  body.pf-drucken > *:not(.pf-druck) { display: none !important; }
+  body.pf-drucken { overflow: visible !important; }
+  body.pf-drucken .pf-druck { display: block; }
+  .pf-seite { width: 297mm; height: 167mm; break-after: page; container-type: size; overflow: hidden; }
+  .pf-seite:last-child { break-after: auto; }
+  .pf-seite .pf-buehne { border: 0; width: 100cqw; height: 100cqh; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

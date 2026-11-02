@@ -14,7 +14,7 @@ argument-hint: <slug> [--nur-abstract] | --pruefen [<seite> …] [--lauf DIR]
 Ablauf: Rechte → Volltext → Rolle lesen → Anker prüfen → Fundstellen am Original prüfen → Karte schreiben → Rolle
 gegenpruefen → Befunde umsetzen → Block „Nachweis“. `--pruefen` beginnt bei der Gegenprüfung. Argumente: `$ARGUMENTS`.
 
-`K="uv run --no-config --quiet ${CLAUDE_SKILL_DIR}/../okfw/okfw.py"`, `A="uv run --no-config --quiet --script ${CLAUDE_SKILL_DIR}/../recherche/scripts/api.py"`,
+`K="env WIKI_ACTOR=claude-code/<deine Modellkennung> uv run --no-config --quiet ${CLAUDE_SKILL_DIR}/../okfw/okfw.py"` (der Akteur steht in `generated`; ist `WIKI_ACTOR` schon gesetzt, entfällt `env …`; kennst du deine Modellkennung nicht sicher, lass es weg, dann steht dort `unknown` und der Lint warnt), `A="uv run --no-config --quiet --script ${CLAUDE_SKILL_DIR}/../recherche/scripts/api.py"`,
 `R="uv run --no-config --quiet ${CLAUDE_SKILL_DIR}/../okfw/rollen.py"`. Arbeitsordner `W=<LAUF oder Scratchpad>/lesen/<slug>/`.
 
 **Wiki festhalten:** Am Anfang im Projektordner `WIKI="$PWD/wiki.toml"` setzen, bevor in `$W` gewechselt wird. `rollen.py` sucht
@@ -104,8 +104,10 @@ als JSON-Block“; seine Antwort nach `$W/entwurf.md`.
   bei bestehender Karte (der Normalfall nach der Aufnahme mit /recherche) per Edit nur die Felder `raw_packet: raw/<slug>` und `access: fulltext`
   setzen, den Rest des Frontmatters erhalten, dann `$K body sources/<slug> --nachziehen`. Ohne Rohquellen-Ordner
   `$K hash <pfad> --from <url>` als `fulltext:`-Block. Im Modus Abstract `access: abstract`, kein Paket.
-- Text mit `$K body sources/<slug> <datei> [--detail "…"]`, Frontmatter gezielt ändern (unbekannte Felder erhalten). Dann `$K lint`
-  (0 Fehler). `verified` setzt dieser Schritt nie.
+- Text mit `$K body sources/<slug> <datei> --rolle lesen [--modell <modell>] [--detail "…"]`, damit `generated.modelle` das Modell
+  des Entwurfs nennt, auch wenn du den Text überarbeitet hast; `--modell` nur, wenn die Rolle in der Sitzung lief und ein anderes
+  Modell nutzte als eingetragen. Frontmatter gezielt ändern (unbekannte Felder erhalten, `generated.modelle` nie). Dann `$K lint`
+  (0 Fehler, `modell_unbekannt` beheben). `verified` setzt dieser Schritt nie.
 - Erklärungen (Interessenkonflikte, Förderung) stehen in der Textfassung unter `## Angaben / …`; unter „Einschränkungen“ aufnehmen.
 
 ## 6. Gegenprüfen (automatisch, nie überspringen)

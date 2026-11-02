@@ -1,0 +1,8 @@
+/* okfw serve: Aufträge. Nur Variablen des Designs, keine eigenen Farben; ein Test hält das fest. */
+.okfw-auftrag-kopf { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; justify-content: space-between; }
+.okfw-aenderung { margin: 8px 0; }
+.okfw-ablage { border: 2px dashed var(--border); border-radius: 10px; padding: 16px; margin: 10px 0; text-align: center; }
+.okfw-ablage.ueber, .okfw-tools .ueber { border-color: var(--accent); outline: 2px solid var(--accent); }
+.okfw-aussagen { margin: 6px 0; padding-left: 18px; font-size: 13px; }
+.okfw-aussagen li { margin: 4px 0; }
+.okfw-recht { margin: 8px 0; }

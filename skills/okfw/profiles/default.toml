@@ -5,7 +5,7 @@
 [wiki]
 title = "Wiki – zuerst lesen"
 bundle = "wiki"                       # OKF-Bundle-Wurzel
-actor = "claude-code/claude-opus-5-5" # generated.by für neue Seiten; WIKI_ACTOR überschreibt
+actor = "claude-code/unknown"   # generated.by für neue Seiten; WIKI_ACTOR überschreibt, in Claude Code nennt der Hook das Modell
 okf_version = "0.2"
 requires_core = "0.1"
 

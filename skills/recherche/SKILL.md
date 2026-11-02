@@ -57,7 +57,7 @@ Ohne beides nachfragen (in /goal-Läufen die Frage aus der Bedingung nehmen). `-
    `${CLAUDE_SKILL_DIR}/../web-zugriff/scripts/web-recherche "<Frage>: nenne Treffer mit Titel, DOI oder PMID, URL" --ziel "$LAUF/web/" --domains <domains> --modell <modell>`,
    Treffer als Daten lesen und festhalten: `$A eintrag "$LAUF" --weg websuche --db websuche --query "<Frage>" --treffer '[…]' --by claude-code/<modell-id>`.
 6. **Zusammenführen:** `$A zusammenfuehren "$LAUF"`. Prüft das Schema, dedupliziert über DOI, PMID, PMCID, arXiv, CELEX
-   und Titel+Jahr, schreibt `LAUF/kandidaten.json`, zeigt Suchprotokoll und Kandidaten mit allen Funden.
+   und Titel+Jahr, ohne alle diese über die URL, schreibt `LAUF/kandidaten.json`, zeigt Suchprotokoll und Kandidaten mit allen Funden.
 7. **Websuche-Treffer auflösen** im Unterordner, damit Nachschlagen nicht als Fund zählt:
    `$A suche crossref '<Titel>' --lauf "$LAUF/nachschlagen" --max 3`. Passt ein Eintrag, erst vergleichen
    (`$A aufloesen "$LAUF" <nr> --doi <doi>`), dann festhalten: dasselbe mit `--begruendung "<warum dieselbe Arbeit>"`.
@@ -119,7 +119,7 @@ Protokoll: <archivierter Pfad>
 ## Werkzeug `scripts/api.py`
 
 Nur Standardbibliothek, nur HTTPS (Port 443) zu den Hosts der offiziellen APIs (auch bei Weiterleitungen; Schlüsselköpfe gehen
-nie an einen anderen Host). Antworten über 64 MB sind ein Fehler. `--by` ist ohne Angabe `RECHERCHE_BY`, sonst `claude-code/recherche`.
+nie an einen anderen Host). Antworten über 64 MB sind ein Fehler. `--by` ist bei `suche` und `aufloesen` ohne Angabe `RECHERCHE_BY`, sonst `claude-code/recherche`; `eintrag` verlangt es.
 `suche`, `eintrag`, `zusammenfuehren`, `aufloesen`, `fundweg`, `retraktion`, `abstract`, `volltext`, `anker`, `pruefen`,
 `archivieren`, `dienste`; Hilfe mit `api.py <befehl> --help`. Dienste für `suche`: `pubmed`, `europepmc`, `crossref`,
 `openalex`, `semanticscholar`, `arxiv` und `cellar` (EU-Recht, SPARQL). Protokollzeile je Abruf:

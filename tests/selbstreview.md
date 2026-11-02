@@ -8,7 +8,7 @@ Konzeptkarten Widersprüche als `> ⚠️ **Widerspruch:**` mit beiden Fundstell
 
 Den mechanischen Teil (Kartenliste und Lücken) prüft `tests/test_abdeckung.py` mit derselben Funktion `inventory()`
 bei jedem Testlauf, auch auf GitHub. Karten lesen, Widersprüche vermerken und gegenprüfen gehören zur vollen Prüfung,
-die nur bei eigenem Anlass läuft (siehe README, „Release-Schritte“).
+die nur bei eigenem Anlass läuft (siehe docs/entwicklung.md, „Release-Schritte“).
 
 ## 1. Wiki und erste Befundliste (mechanisch)
 
@@ -21,7 +21,7 @@ Das Skript nimmt den Stand eines Commits, nie den Arbeitsbaum, und schreibt nach
 
 - `_stand/`: die Dateien des Commits; geprüft wird der Kern dieses Stands.
 - ein Wiki aus `init --profile dokumentation`, je Datei ein Rohquellen-Paket (`capture --commit`) und eine
-  Quellenkarte: `SKILL.md`, `README.md`, `CHANGELOG.md`, `docs/konfiguration.md`, `okfw.py`, `okf_hook.py`,
+  Quellenkarte: `SKILL.md`, `README.md`, `docs/rundgang.md`, `docs/entwicklung.md`, `CHANGELOG.md`, `docs/konfiguration.md`, `okfw.py`, die Module unter `okfw_kern/`, `okf_hook.py`,
   `hooks/hooks.json`, `settings.example.json`, `profiles/*.toml`, `tests/*.py`.
 - je Unterbefehl, Lint-Regelcode, Konfigurationsschlüssel und Hook eine Konzeptkarte mit den Fundstellen
   in Code, Doku und Tests als Fußnoten mit Zeile, dazu vier Übersichtskarten. Die Liste kommt aus dem Code

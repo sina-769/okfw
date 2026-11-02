@@ -4,16 +4,18 @@
 
 | Bestandteil | Datei | Herkunft | Lizenz |
 |---|---|---|---|
-| IBM Plex Serif, IBM Plex Sans (Regular, SemiBold) | `skills/okfw/templates/fonts/ibmplex*.woff2` | https://github.com/IBM/plex, Copyright © 2017 IBM Corp. | SIL Open Font License 1.1, Reserved Font Name „Plex“ (`OFL-IBM-Plex.txt`) |
+| Bricolage Grotesque, Latin-Teilmenge | `skills/okfw/templates/fonts/bricolagegrotesque-latin-var.woff2` | npm `@fontsource-variable/bricolage-grotesque@5.3.0`, Copyright 2022 The Bricolage Grotesque Project Authors | SIL Open Font License 1.1 (`OFL-Bricolage-Grotesque.txt`) |
+| Instrument Sans, Latin-Teilmenge | `skills/okfw/templates/fonts/instrumentsans-latin-var.woff2` | npm `@fontsource-variable/instrument-sans@5.3.0`, Copyright 2022 The Instrument Sans Project Authors | SIL Open Font License 1.1 (`OFL-Instrument-Sans.txt`) |
+| Newsreader und Newsreader Italic, Latin-Teilmengen | `skills/okfw/templates/fonts/newsreader-*.woff2` | npm `@fontsource-variable/newsreader@5.3.0`, Copyright 2020 The Newsreader Project Authors | SIL Open Font License 1.1 (`OFL-Newsreader.txt`) |
 | JetBrains Mono Regular | `skills/okfw/templates/fonts/jetbrainsmono-regular.woff2` | https://github.com/JetBrains/JetBrainsMono, Copyright 2020 The JetBrains Mono Project Authors | SIL Open Font License 1.1 (`OFL-JetBrains-Mono.txt`) |
 | CSL-Stil „APA Style 7th edition“ | `skills/okfw/templates/apa.csl` | citation-style-language/styles @ 3c6698d791a83016d699f50cbbea857f6ee3d2f8, unverändert; Autorinnen und Autoren im Stil unter `<author>`/`<contributor>` | CC BY-SA 3.0 (im Stil unter `<rights>`) |
 
-Die Schriften werden unverändert weitergegeben (bytegleich mit den Dateien der Rechteinhaber, nur die
-Dateinamen kleingeschrieben) und von `okfw.py dashboard` in die erzeugte HTML-Datei eingebettet, mit
-Copyright-Vermerk und Lizenzhinweis als Kommentar davor; beides erlaubt die OFL. Einzelheiten:
+JetBrains Mono wird unverändert weitergegeben. Die übrigen Schriften sind Latin-Teilmengen von Fontsource und damit
+veränderte Fassungen im Sinn der OFL; ihre Lizenzen nennen keinen Reserved Font Name. Alle werden von `okfw.py dashboard` in
+die erzeugte HTML-Datei eingebettet, mit Copyright-Vermerk und Lizenzhinweis als Kommentar davor; beides erlaubt die OFL. Einzelheiten:
 `skills/okfw/templates/fonts/README.md`.
 
-Marken: IBM Plex® ist eine Marke der IBM Corp., JetBrains Mono eine Marke der JetBrains s.r.o. (so vermerkt
+Marken: JetBrains Mono ist eine Marke der JetBrains s.r.o. (so vermerkt
 in den Schriftdateien). Die Namen stehen hier nur, um die Schriften zu bezeichnen; die OFL räumt keine
 Markenrechte ein.
 
@@ -40,5 +42,7 @@ uv holt beide beim ersten Start des Kerns aus PyPI (Skriptkopf nach PEP 723 in `
 
 ## Bilder und Testprotokolle
 
-Die Bilder unter `docs/` und die Protokolle unter `tests/` zeigen ein Beispiel-Wiki mit Auszügen aus den beiden
+Die Bilder unter `docs/` zeigen ein Beispiel-Wiki mit Auszügen aus amtlichen Texten der EU: den Verordnungen (EU) 2024/1689,
+(EU) 2026/1744 und (EU) 2024/2847 und der Richtlinie (EU) 2024/2853, abgerufen über die Cellar-API des Amts für
+Veröffentlichungen am 1.11.2026. Die Protokolle unter `tests/` zeigen ein Beispiel-Wiki mit Auszügen aus den beiden
 Quellen oben: der OKF-Spezifikation (Apache-2.0) und dem README von pi-llm-wiki (MIT).

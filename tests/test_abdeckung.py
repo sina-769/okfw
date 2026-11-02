@@ -3,21 +3,25 @@
 Die Liste kommt aus dem Code, mit derselben Funktion wie im Selbstreview (tests/selbstreview.py, `inventory`):
 Unterbefehle und Optionen aus argparse, Lint-Codes aus SEVERITY und add(…), wiki.toml-Schlüssel aus
 DEFAULT_CONFIG, TYPE_DEFAULTS und den Lesezugriffen im Kern und im Hook, Hooks aus okf_hook.py. „Genannt“ heißt:
-SKILL.md, README.md oder docs/konfiguration.md trifft den Namen; „berührt“: eine Datei unter tests/ (außer dieser)
+SKILL.md, README.md, docs/rundgang.md, docs/entwicklung.md oder docs/konfiguration.md trifft den Namen; „berührt“: eine Datei unter tests/ (außer dieser)
 nennt ihn so, wie ein Test ihn benutzt. Textsuche, deterministisch, ohne Netz und ohne Modell.
 """
 
 import json
+import re
 import subprocess
 import unittest
 
 from . import selbstreview
-from .hilfe import CORE, HEADER, SKILL, UV, clean_env
+from .hilfe import CORE, HEADER, PLUGIN, SKILL, UV, clean_env
 
-DOKU = ("skill", "readme", "konf")   # CHANGELOG zählt nicht als Doku eines Verhaltens
+DOKU = ("skill", "readme", "rundgang", "entwicklung", "konf")   # CHANGELOG zählt nicht als Doku eines Verhaltens
 
 # Bewusste Ausnahmen, je Zeile mit Grund: (Art, Name, Prüfung) → Grund
 AUSNAHMEN = {
+    **{("regel", code, "gemeldet"): "kommt aus pfad_befunde über add(b[\"code\"], …), dieselbe Liste wie im Vortrag"
+       for code in ("pfad_karte_abgeloest", "pfad_karte_entwurf", "pfad_karte_fehlt", "pfad_karte_veraltet",
+                    "pfad_karte_widerspruch", "pfad_text_ohne_beleg")},
 }
 
 
@@ -97,6 +101,12 @@ class Abdeckung(unittest.TestCase):
                 offen |= {(art, e["name"], "test")} if not e["tests"] else set()
         offen |= {(k[0], k[1], k[2]) for k in AUSNAHMEN if k[2] not in ("doku", "test")}
         self.assertEqual(sorted(set(AUSNAHMEN) - offen), [], "Ausnahmen ohne Grund mehr: streichen")
+
+    def test_version_des_kerns_folgt_dem_plugin(self):
+        """`--version`, `requires_core` und der User-Agent lesen VERSION; ein Patch ohne Änderung am Kern darf nachhinken."""
+        kern = re.search(r'^VERSION = "(\d+\.\d+)\.', (PLUGIN / "skills/okfw/okfw_kern/basis.py").read_text(encoding="utf-8"), re.M).group(1)
+        plugin = json.loads((PLUGIN / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
+        self.assertEqual(kern, plugin.rsplit(".", 1)[0])
 
 
 if __name__ == "__main__":

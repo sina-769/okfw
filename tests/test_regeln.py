@@ -15,7 +15,7 @@ import unittest
 
 from .hilfe import WikiTest, clean_env
 
-ACTOR = "claude-code/claude-opus-5-5"   # [wiki] actor im Profil default
+ACTOR = "claude-code/unknown"   # [wiki] actor im Profil default
 GEN = f"generated: {{by: {ACTOR}, at: '2026-10-29T09:00:00Z'}}"
 
 Q1 = f"""---

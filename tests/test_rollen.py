@@ -166,7 +166,7 @@ class Schichten(Grund):
         self.assertEqual(rollen.warnungen(cfg), [])
 
     def test_datenklassen_wie_im_kern(self):
-        quelle = (SKILL / "okfw.py").read_text(encoding="utf-8")
+        quelle = (SKILL / "okfw_kern" / "basis.py").read_text(encoding="utf-8")
         kern = tuple(re.findall(r'"(\w+)"', re.search(r"^DATENKLASSEN = \((.*?)\)", quelle, re.M).group(1)))
         self.assertEqual(kern, rollen.DATENKLASSEN)
 

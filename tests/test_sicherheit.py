@@ -13,6 +13,7 @@ import re
 import sys
 import tempfile
 import threading
+import time
 import tomllib
 import unittest
 from html.parser import HTMLParser
@@ -233,7 +234,7 @@ class Csp(Grundlage):
                     "text.split('<body')[0], text.count('<script>')]")
         self.assertEqual(r, [False, False, 2])
         serve = (SKILL / "okfw_serve.py").read_text(encoding="utf-8")
-        self.assertIn("self.wiki().render_dashboard(csp=False)", serve)
+        self.assertIn(".render_dashboard(csp=False)", serve)
 
     def test_oeffentliche_ausgabe_traegt_sie_auch(self):
         with (self.root / "wiki.toml").open("a", encoding="utf-8") as f:
@@ -262,7 +263,8 @@ class CssPruefung(Grundlage):
                   "a{b:\\75rl(#a/*)} c{background:url(http://x/a)} d{e:url(#*/)}",
                   "a{b:url(x\"\n/*)} c{background:url(http://x/a)} d{e:url(#*/)}",
                   "a{b:url((\"\n/*)} c{background:url(http://x/a)} d{e:url(#*/)}",
-                  "a{background:src('http://x/a')}", "a{background:image('http://x/a')}"]
+                  "a{background:src('http://x/a')}", "a{background:image('http://x/a')}",
+                  "a{behavior:url(#a)}", "a{-ms-behavior:url(#a)}", "a{scroll-behavior:smooth;behavior:url(#a)}"]
         for css in faelle:
             with self.subTest(css):
                 self.assertIsNotNone(self.problem(css))
@@ -270,7 +272,8 @@ class CssPruefung(Grundlage):
     def test_harmloses_bleibt_erlaubt(self):
         faelle = ['a{content:"/*"} b{color:red}', "/* url(http://x) @import 'y'; */ a{color:red}",
                   'a{content:"\\"/*"} /* url(http://x) */ b{color:red}', "a{background:url(#a)} b{mask:url('#b')}",
-                  "@font-face{font-family:x;src:url(data:font/woff2;base64,AA)}", ".w-1\\/2{color:red}"]
+                  "@font-face{font-family:x;src:url(data:font/woff2;base64,AA)}", ".w-1\\/2{color:red}",
+                  "html{scroll-behavior:smooth}", "a{overscroll-behavior:contain}"]
         for css in faelle:
             with self.subTest(css):
                 self.assertIsNone(self.problem(css))
@@ -355,6 +358,101 @@ except okfw.FigureError as exc:
         # eine andere Angabe im Kopf ändert nichts: gelesen wird UTF-8
         kopf = '<?xml version="1.0" encoding="ISO-8859-1"?>'.encode() + gut.encode()
         self.assertIn("Größe", self.clean(kopf)["svg"])
+
+    def test_nur_der_standardkopf_wird_uebergangen(self):
+        kennung, adresse = "-//W3C//DTD SVG 1.1//EN", "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"
+        kopf = f'<!DOCTYPE svg PUBLIC "{kennung}" "{adresse}">'
+        wurzel = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><text>MARKE</text></svg>'
+        for name, quelle in {"allein": kopf + wurzel, "einfache Anführungszeichen": kopf.replace('"', "'") + wurzel,
+                             "mit Kopf und Kommentar": f'<?xml version="1.0"?>\n<!-- a -->\n<!-- b -->\n{kopf}\n{wurzel}',
+                             "BOM": f"\ufeff{kopf}{wurzel}",
+                             "SVG 1.0": '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.0//EN" "http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd">' + wurzel}.items():
+            with self.subTest(name):
+                r = self.clean(quelle.encode())
+                self.assertIn("MARKE", r.get("svg", ""), r)
+                self.assertNotIn("DOCTYPE", r["svg"])
+        for name, quelle in {"internes Subset": f'{kopf[:-1]} [<!ENTITY x "ENTITAET">]>' + wurzel.replace("MARKE", "&x;"),
+                             "leeres Subset": f"{kopf[:-1]} []>" + wurzel, "ohne PUBLIC": "<!DOCTYPE svg>" + wurzel,
+                             "SYSTEM": '<!DOCTYPE svg SYSTEM "file:///etc/passwd">' + wurzel,
+                             "fremde Adresse": f'<!DOCTYPE svg PUBLIC "{kennung}" "http://evil.example/x.dtd">' + wurzel,
+                             "falsches Paar": f'<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.0//EN" "{adresse}">' + wurzel,
+                             "fremde Kennung": f'<!DOCTYPE svg PUBLIC "-//evil//EN" "{adresse}">' + wurzel,
+                             "anderes Wurzelelement": kopf.replace("DOCTYPE svg", "DOCTYPE html") + wurzel,
+                             "kleingeschrieben": kopf.replace("DOCTYPE", "doctype") + wurzel,
+                             "zweimal": kopf + kopf + wurzel, "dahinter ENTITY": kopf + '<!ENTITY x "y">' + wurzel,
+                             "im Kommentar davor": f'<!-- <!ENTITY x "y"> -->{kopf}{wurzel}',
+                             "im Kommentar dahinter": f"{kopf}<!-- {kopf} -->{wurzel}",
+                             "im Dokument": wurzel.replace("MARKE", kopf),
+                             "als CDATA": wurzel.replace("MARKE", f"<![CDATA[{kopf}]]>"),
+                             "hinter Text": f"x{kopf}{wurzel}",
+                             "Lücke im Schlüsselwort": f"<!DOC<!-- -->TYPE{kopf[9:]}{wurzel}"}.items():
+            with self.subTest(name):
+                r = self.clean(quelle.encode())
+                self.assertIn("fehler", r, r)
+                self.assertNotIn("ENTITAET", str(r))
+        # hinter dem Kopf bleiben eigene Entities ungültiges XML
+        self.assertIn("kein gültiges XML", self.clean(kopf + wurzel.replace("MARKE", "&nbsp;"))["fehler"])
+
+    def test_kopf_pruefung_bleibt_bei_grosser_datei_schnell(self):
+        for name, quelle in {"ein Kommentar": "<!--" + "x" * 190_000 + '--><svg viewBox="0 0 1 1"/>',
+                             "viele Kommentare": "<!--a-->" * 24_000 + '<svg viewBox="0 0 1 1"/>',
+                             "ohne Ende": "<!--" + "-" * 190_000}.items():
+            with self.subTest(name):
+                r = self.py(f"""
+import time
+t = time.monotonic()
+okfw.svg_ohne_kopf({quelle!r})
+result = time.monotonic() - t""")
+                self.assertLess(r, 2)
+
+    def test_style_regeln_lassen_nichts_durch(self):
+        kopf = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1">'
+        fuss = '<rect class="a" id="i"/><text class="a">t</text></svg>'
+        for name, regel in {"url": ".a{fill:url(http://evil.example/x)}", "url ohne Schema": ".a{fill:url(//evil.example/x)}",
+                            "maskiert": ".a{fill:\\75rl(http://evil.example/x)}", "Kommentar im url": ".a{fill:ur/**/l(http://evil.example/x)}",
+                            "Kommentar im Namen": ".a{fi/**/ll:url(http://evil.example/x)}",
+                            "image-set": ".a{fill:image-set('http://evil.example/x' 1x)}", "image": ".a{fill:image('http://evil.example/x')}",
+                            "Font src": "@font-face{font-family:evil;src:url(http://evil.example/f.woff)}",
+                            "import": "@import url(http://evil.example/a.css);", "import Text": '@import "http://evil.example/a.css";',
+                            "Zeile vor url": ".a{fill:red;marker-start:url(http://evil.example/m)}",
+                            "url an #i": "#i{clip-path:url(http://evil.example/c)}", "Stern": "*{font:url(http://evil.example/x)}",
+                            "javascript": ".a{fill:javascript:evil.example}", "data": ".a{fill:data:image/png;base64,evil.example}",
+                            "expression": ".a{fill:expression(evil.example)}", "Klammer ohne Ende": ".a{fill:url(http://evil.example/x",
+                            "style-Ende als CDATA": "<![CDATA[</style><script>evil.example</script>.a{fill:<script>evil.example</script>}]]>"}.items():
+            with self.subTest(name):
+                r = self.clean(f"{kopf}<style>{regel}</style>{fuss}")
+                self.assertNotIn("evil.example", r.get("svg", ""), r)
+                self.assertNotIn("<style", r.get("svg", ""), r)
+                self.assertNotIn("<script", r.get("svg", ""), r)
+                self.assertNotIn("class=", r.get("svg", ""), r)
+
+    def test_style_regeln_heben_nichts_aus_dem_rahmen(self):
+        r = self.clean('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><style>'
+                       'svg{position:fixed;inset:0;width:100vw;z-index:9;transform:scale(9);fill:red}'
+                       '*{animation:x 1s;cursor:wait;--v:1;background:url(#a)}.a{transform:translate(1,1)}</style><rect class="a"/></svg>')
+        for verboten in ("position", "inset", "100vw", "z-index", "transform", "animation", "cursor", "--v", "background"):
+            self.assertNotIn(verboten, r["svg"], verboten)
+        self.assertIn('style="fill:red"', r["svg"])
+        self.assertIn("Stil position", r["entfernt"])
+
+    def test_style_regeln_blaehen_nichts_auf(self):
+        """Eine lange Regel auf vielen Elementen wüchse sonst auf Hunderte MB; und die Datei muss die Grenze beim Bau bestehen."""
+        kopf = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><style>'
+        for name, quelle in {"lange Regel": kopf + ".a{font-family:" + "x" * 150_000 + "}</style>" + '<g class="a"/>' * 3000 + "</svg>",
+                             "viele Regeln": kopf + ".a{fill:red}" * 8000 + "</style>" + '<g class="a"/>' * 4000 + "</svg>",
+                             "dieselbe Klasse oft": kopf + ".a{fill:red}" * 15_000 + "</style>" + '<g class="' + "a " * 5000 + '"/>' * 200 + "</svg>"}.items():
+            with self.subTest(name):
+                r = self.py(f"""
+import time
+t = time.monotonic()
+try:
+    sauber = okfw.clean_svg({quelle!r})[0]
+    groesse = len(sauber.encode())
+except okfw.FigureError as exc:
+    sauber, groesse = str(exc), 0
+result = [time.monotonic() - t, groesse, sauber[:120]]""")
+                self.assertLess(r[0], 10)
+                self.assertLessEqual(r[1], 200 * 1024, r[2])
 
     def test_verschachteltes_use_waechst_nicht_exponentiell(self):
         kopf = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><defs><g id="g0"><rect width="1" height="1"/></g>'
@@ -1244,8 +1342,8 @@ class ServeAngriffe(unittest.TestCase):
                         'rights: {ki_auswertung: \'nein: Vertrag\'}\n---\nText\n', encoding="utf-8")
         vorher = pfad.read_bytes()
         aufgerufen = []
-        with mock.patch.object(_serve, "rollen_aufruf", lambda *a: aufgerufen.append(a) or (0, "{}", "")):
-            status, antwort = self.post("/api/vorschlag", {"id": "sources/q1", "anweisung": "Fasse zusammen."})
+        with mock.patch.object(_serve.okfw_auftraege, "rollen_aufruf", lambda *a: aufgerufen.append(a) or (0, "{}", "")):
+            status, antwort = self.post("/api/auftrag", {"typ": "bearbeiten", "id": "sources/q1", "anweisung": "Fasse zusammen."})
         self.assertEqual(status, 422, antwort)
         fehler = self.json_(antwort).get("fehler", antwort)
         self.assertIn("KI-Auswertung", fehler)
@@ -1256,9 +1354,16 @@ class ServeAngriffe(unittest.TestCase):
     def test_vorschlag_mit_recht_laeuft(self):
         """p5.py (Kontrolle): Ohne rights-Eintrag läuft der Vorschlag normal."""
         aufgerufen = []
-        with mock.patch.object(_serve, "rollen_aufruf", lambda *a: aufgerufen.append(a) or (0, json.dumps({"text": "# Neu\n"}), "")):
-            status, antwort = self.post("/api/vorschlag", {"id": "concepts/kern", "anweisung": "Kürze."})
-        self.assertEqual(status, 200, antwort)
+        with mock.patch.object(_serve.okfw_auftraege, "rollen_aufruf", lambda *a: aufgerufen.append(a) or (0, json.dumps({"text": "# Neu\n"}), "")):
+            status, antwort = self.post("/api/auftrag", {"typ": "bearbeiten", "id": "concepts/kern", "anweisung": "Kürze."})
+            self.assertEqual(status, 202, antwort)
+            kennung = self.json_(antwort)["id"]
+            for _ in range(500):
+                status, antwort = self.anfrage("GET", f"/api/auftrag?id={kennung}")
+                if self.json_(antwort)["zustand"] == "fertig":
+                    break
+                time.sleep(0.02)
+        self.assertEqual(self.json_(antwort)["zustand"], "fertig", antwort)
         self.assertEqual(len(aufgerufen), 1)
 
 
@@ -1314,6 +1419,12 @@ class RollenUndApi(unittest.TestCase):
 @unittest.skipIf(_okfw is None, f"okfw lässt sich nicht importieren: {_IMPORT_FEHLER}")
 class KernLaden(unittest.TestCase):
     """load_yaml, set_frontmatter_key, css_problem und die Druckbar-Schicht (okfw.py): reine Funktionen."""
+
+    def test_zeitstempel_bleiben_text(self):
+        """OKF-Werte wie 2026-06-30T14:00:00Z: Als Datum käme `verified` nach dem nächsten verify als !!timestamp zurück."""
+        d = _okfw.load_yaml("timestamp: 2026-06-30T14:00:00Z\nverified:\n- {by: human:a, at: 2026-06-30T14:00:00Z}\n")
+        self.assertEqual((d["timestamp"], d["verified"][0]["at"]), ("2026-06-30T14:00:00Z", "2026-06-30T14:00:00Z"))
+        self.assertNotIn("!!timestamp", _okfw.dump_key("verified", d["verified"]))
 
     def test_load_yaml_lehnt_merge_und_doppelte_schluessel_ab(self):
         """okfw.py: Merge-Schlüssel und doppelte Schlüssel werden abgelehnt, auch in Anführungszeichen und verschachtelt;

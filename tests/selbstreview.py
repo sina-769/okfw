@@ -9,9 +9,9 @@
 Nimmt den Stand eines Commits (Standard HEAD, nie den Arbeitsbaum), legt darunter
 .nachbau/selbstreview-<version>/ an (init --profile dokumentation, je Datei ein Rohquellen-Paket mit
 capture --commit und eine Quellenkarte) und gewinnt die Kartenliste mechanisch aus dem Code:
-je Unterbefehl (argparse in okfw.py), Lint-Regelcode (SEVERITY und add(...)), Konfigurationsschlüssel
+je Unterbefehl (argparse im Kern), Lint-Regelcode (SEVERITY und add(...)), Konfigurationsschlüssel
 (DEFAULT_CONFIG, TYPE_DEFAULTS und jeder Zugriff auf cfg im Kern und im Hook) und Hook (Handler in
-okf_hook.py). Jede Karte belegt per Fußnote mit Zeile, wo Code, Doku (SKILL.md, README.md, CHANGELOG.md,
+okf_hook.py). Jede Karte belegt per Fußnote mit Zeile, wo Code, Doku (SKILL.md, README.md, Rundgang, Entwicklung, CHANGELOG.md,
 docs/konfiguration.md) und Tests das Konzept nennen. Die Lücken (im Code, aber in keiner Doku; in der Doku,
 aber nicht im Code; ohne Test; Schwere und Hooks, die zwischen Doku und Code abweichen) stehen als erste
 Befundliste in befunde.md neben dem Wiki, die Rohdaten in inventar.json.
@@ -39,12 +39,14 @@ LICENSE_URL = f"{REPO_URL}/blob/main/LICENSE"
 # Kürzel (Fußnoten-Präfix), Pfad im Plugin, Art, Beschreibung
 DOKU = [
     ("skill", "skills/okfw/SKILL.md", "Arbeitsweise und Regeln für Claude"),
-    ("readme", "README.md", "Einstieg, Installation, Tests"),
+    ("readme", "README.md", "Einstieg, Installation"),
+    ("rundgang", "docs/rundgang.md", "Funktionen mit Bildern, Modellrollen, Freigabe, Arbeit von Hand"),
+    ("entwicklung", "docs/entwicklung.md", "Voraussetzungen, Tests, Nachbau, Release"),
     ("changelog", "CHANGELOG.md", "Änderungen je Version"),
     ("konf", "skills/okfw/docs/konfiguration.md", "alle Befehle, wiki.toml-Schlüssel, Lint-Codes, Hooks"),
 ]
 CODE = [
-    ("kern", "skills/okfw/okfw.py", "Kern: CLI und Bibliothek"),
+    ("kern", "skills/okfw/okfw.py", "Kern: Eingang für CLI und Bibliothek"),
     ("hook", "skills/okfw/hooks/okf_hook.py", "Hooks für Claude Code"),
     ("hooksjson", "hooks/hooks.json", "Hook-Block des Plugins"),
     ("settings", "skills/okfw/hooks/settings.example.json", "Hook-Block für den Skill-Ordner"),
@@ -74,6 +76,12 @@ def test_sources(paths) -> list[tuple[str, str, str]]:
             for p in sorted(map(str, paths)) if p.endswith(".py") and Path(p).name not in NOT_TESTS]
 
 
+def kern_code(root: Path) -> list[tuple[str, str, str]]:
+    """(Kürzel, Pfad im Plugin, Art) je Modul unter okfw_kern/; der Eingang okfw.py steht in CODE."""
+    return [(f"kern-{p.stem.replace('_', '-')}", str(p.relative_to(root)), "Kern: Modul")
+            for p in sorted((root / "skills/okfw/okfw_kern").glob("*.py")) if p.name != "__init__.py"]
+
+
 def inventory(root: Path = PLUGIN) -> dict:
     """Kartenliste und Lücken für den Plugin-Ordner root (Arbeitsbaum); dieselbe Liste wie im Selbstreview."""
     return collect(root, test_sources(p.relative_to(root) for p in (root / "tests").glob("*.py")))
@@ -86,6 +94,7 @@ def stage(rev: str, target: Path) -> tuple[str, str, list[tuple[str, str, str]]]
     tests = test_sources(git("ls-tree", "--name-only", sha, "tests/").split())
     keep = [rel for _, rel, _ in DOKU + CODE + tests]
     keep += git("ls-tree", "-r", "--name-only", sha, "skills/okfw/templates/").split()
+    keep += git("ls-tree", "-r", "--name-only", sha, "skills/okfw/okfw_kern/").split()
     for rel in keep:
         out = target / rel
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -121,7 +130,7 @@ def subcommands(tree: ast.Module) -> list[dict]:
     result, current = [], None
     for st in build.body:
         call = st.value if isinstance(st, (ast.Assign, ast.Expr)) else None
-        if isinstance(call, ast.Call) and getattr(call.func, "attr", "") == "add_parser":
+        if isinstance(call, ast.Call) and getattr(call.func, "attr", "") == "add_parser" and getattr(call.func.value, "id", "") == "sub":
             kw = {k.arg: k.value for k in call.keywords}
             current = {"name": literal_str(call.args[0]), "line": st.lineno, "end": st.end_lineno,
                        "aliases": [literal_str(e) for e in getattr(kw.get("aliases"), "elts", [])],
@@ -153,18 +162,19 @@ def subcommands(tree: ast.Module) -> list[dict]:
     return result
 
 
-def lint_codes(tree: ast.Module) -> dict[str, dict]:
-    """Codes aus SEVERITY (mit Schwere) und aus jedem add("code", …) im Kern."""
+def lint_codes(kerne: dict[str, ast.Module]) -> dict[str, dict]:
+    """Codes aus SEVERITY (mit Schwere) und aus jedem add("code", …) im Kern; Fundstellen je Datei."""
     codes: dict[str, dict] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "SEVERITY" for t in node.targets):
-            for k, v in zip(node.value.keys, node.value.values):
-                codes.setdefault(k.value, {"emitted": []})
-                codes[k.value].update(severity=v.value, severity_line=k.lineno)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "add" and node.args:
-            code = literal_str(node.args[0])
-            if code and re.fullmatch(r"[a-z]+(_[a-z]+)*", code):
-                codes.setdefault(code, {"emitted": []})["emitted"].append(node.lineno)
+    for label, tree in kerne.items():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "SEVERITY" for t in node.targets):
+                for k, v in zip(node.value.keys, node.value.values):
+                    codes.setdefault(k.value, {"emitted": []})
+                    codes[k.value].update(severity=v.value, severity_line=k.lineno, severity_datei=label)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "add" and node.args:
+                code = literal_str(node.args[0])
+                if code and re.fullmatch(r"[a-z]+(_[a-z]+)*", code):
+                    codes.setdefault(code, {"emitted": []})["emitted"].append((label, node.lineno))
     return codes
 
 
@@ -274,15 +284,18 @@ class CfgReads(ast.NodeVisitor):
             self.hits.append((path, node.lineno))
 
 
-def config_keys(kern: ast.Module, hook: ast.Module) -> dict[str, dict]:
+def config_keys(kerne: dict[str, ast.Module], hook: ast.Module) -> dict[str, dict]:
     keys: dict[str, dict] = {}
-    for node in ast.walk(kern):
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict):
-            name = getattr(node.targets[0], "id", "")
-            if name == "DEFAULT_CONFIG":
-                dict_keys(node.value, (), keys, 2)
-            elif name == "TYPE_DEFAULTS":
-                dict_keys(node.value, ("types", "*"), keys, 1)
+    datei = "kern"
+    for label, tree in kerne.items():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict):
+                name = getattr(node.targets[0], "id", "")
+                if name == "DEFAULT_CONFIG":
+                    dict_keys(node.value, (), keys, 2)
+                    datei = label
+                elif name == "TYPE_DEFAULTS":
+                    dict_keys(node.value, ("types", "*"), keys, 1)
     # DEFAULT_CONFIG nennt auch Abschnitte ohne Schlüssel (enums, rights …) und export als leere Tabelle
     for key in list(keys):
         ck = concept_key(tuple(key.split(".")))
@@ -290,7 +303,7 @@ def config_keys(kern: ast.Module, hook: ast.Module) -> dict[str, dict]:
             entry = keys.pop(key)
             if ck:
                 keys.setdefault(ck, {"default": [], "read": {}})["default"] += entry["default"]
-    for label, tree, roots in (("kern", kern, {"cfg"}), ("hook", hook, {"cfg"})):
+    for label, tree, roots in (*((la, tr, {"cfg"}) for la, tr in kerne.items()), ("hook", hook, {"cfg"})):
         v = CfgReads(roots)
         v.visit(tree)
         wild = []
@@ -304,6 +317,7 @@ def config_keys(kern: ast.Module, hook: ast.Module) -> dict[str, dict]:
             for key in [k for k in keys if k.startswith("export.") and k.endswith(f".{name}")]:
                 keys[key]["read"].setdefault(label, []).append(line)
     for entry in keys.values():
+        entry["default_datei"] = datei
         for label in entry["read"]:
             entry["read"][label] = sorted(set(entry["read"][label]))
     return keys
@@ -409,18 +423,23 @@ def hits(texts: dict[str, str], patterns: list[str], extra=None) -> dict[str, li
 
 def collect(stand: Path, tests: list[tuple[str, str, str]]) -> dict:
     read = lambda rel: (stand / rel).read_text(encoding="utf-8")
-    files = {label: read(rel) for label, rel, _ in DOKU + CODE + tests}
+    module = kern_code(stand)
+    files = {label: read(rel) for label, rel, _ in DOKU + CODE + module + tests}
     docs = {label: files[label] for label, _, _ in DOKU}
     testtexts = {label: files[label] for label, _, _ in tests}
-    kern, hook = ast.parse(files["kern"]), ast.parse(files["hook"])
+    kerne = {label: ast.parse(files[label]) for label in ("kern", *(m[0] for m in module))}
+    hook = ast.parse(files["hook"])
 
     inv = {"befehle": [], "regeln": [], "schluessel": [], "hooks": [], "doku_ohne_code": [], "abweichungen": [],
            "begriffe": []}
 
     # Unterbefehle und Optionen
-    cmds = subcommands(kern)
+    parser = next(label for label, tree in kerne.items()
+                  if any(isinstance(n, ast.FunctionDef) and n.name == "build_parser" for n in ast.walk(tree)))
+    cmds = subcommands(kerne[parser])
     known_cmds = {n for c in cmds for n in [c["name"], *c["aliases"]]}
     for c in cmds:
+        c["datei"] = parser
         names = [c["name"], *c["aliases"]]
         alt = "|".join(re.escape(n) for n in names)
         pats = [rf"`(?:okfw\.py )?(?:{alt})(?=[ `])", rf"okfw\.py\"? (?:--\S+ \S+ )*(?:{alt})\b",
@@ -450,7 +469,7 @@ def collect(stand: Path, tests: list[tuple[str, str, str]]) -> dict:
                     inv["doku_ohne_code"].append({"art": "befehl", "name": cand, "datei": label, "zeile": no})
 
     # Lint-Regeln
-    codes = lint_codes(kern)
+    codes = lint_codes(kerne)
     doc_sev = {}
     for no, line in enumerate(docs["konf"].splitlines(), 1):
         m = re.match(r"\| (error|warn|info) \| (.*)\|$", line)
@@ -471,7 +490,7 @@ def collect(stand: Path, tests: list[tuple[str, str, str]]) -> dict:
             inv["doku_ohne_code"].append({"art": "regel", "name": code, "datei": "konf", "zeile": no})
 
     # Konfigurationsschlüssel
-    keys = config_keys(kern, hook)
+    keys = config_keys(kerne, hook)
     profiles = {label: tomllib.loads(files[label]) for label in ("prof-default", "prof-doku")}
 
     def walk(d: dict, prefix: tuple = ()):
@@ -617,20 +636,20 @@ def cards(inv: dict, files: dict) -> dict[str, dict]:
         alias = f" (Alias {', '.join(f'`{a}`' for a in c['aliases'])})" if c["aliases"] else ""
         body = [f"# Befehl `{c['name']}`", "",
                 f"Der Unterbefehl `{c['name']}`{alias} steht im Parser mit der Hilfe „{c['help']}“."
-                + card.ref("kern", c["line"], c["end"])]
+                + card.ref(c["datei"], c["line"], c["end"])]
         if c.get("func"):
-            body[-1] += f" Ausgeführt wird er in `{c['func']['name']}`." + card.ref("kern", c["func"]["line"],
-                                                                                     c["func"]["end"])
+            body[-1] += f" Ausgeführt wird er in `{c['func']['name']}`." + card.ref(c["datei"], c["func"]["line"],
+                                                                                         c["func"]["end"])
         body += ["", "## Im Code", ""]
         for o in c["options"]:
             req = " (Pflicht)" if o["required"] else ""
             hilfe = ": " + re.sub(r"(\[\^[^\]]*\])", r"`\1`", o["help"]) if o["help"] else ""
             flags = " / ".join(f"`{f}`" for f in o["flags"])
             doc = "" if o["doku"] or not o["flags"][0].startswith("-") else " – in keiner Doku-Datei"
-            body.append(f"- {flags}{req}{hilfe}{doc}.{card.ref('kern', o['line'])}")
+            body.append(f"- {flags}{req}{hilfe}{doc}.{card.ref(c['datei'], o['line'])}")
         if not c["options"]:
             body.append("- keine Optionen.")
-        body += ["", "## In der Doku", ""] + (card.hitlist(c["doku"]) or ["- keine Fundstelle in SKILL.md, README.md, "
+        body += ["", "## In der Doku", ""] + (card.hitlist(c["doku"]) or ["- keine Fundstelle in SKILL.md, README.md, Rundgang, Entwicklung, "
                                                                           "CHANGELOG.md oder konfiguration.md."])
         body += ["", "## Tests", ""] + (card.hitlist(c["tests"]) or ["- kein Test ruft den Befehl auf (Textsuche)."])
         notes = befund_lines(c, "befehl")
@@ -645,11 +664,11 @@ def cards(inv: dict, files: dict) -> dict[str, dict]:
         slug = slug_for("regel", r["name"])
         body = [f"# Lint-Regel `{r['name']}`", ""]
         if r.get("severity"):
-            body.append(f"Standardschwere im Kern: {r['severity']}." + card.ref("kern", r["severity_line"]))
+            body.append(f"Standardschwere im Kern: {r['severity']}." + card.ref(r["severity_datei"], r["severity_line"]))
         else:
             body.append("Der Code steht nicht in SEVERITY; `severity()` nimmt dann warn.")
         body += ["", "## Im Code", ""]
-        body += [f"- gemeldet in Z. {n}.{card.ref('kern', n)}" for n in r["emitted"]] or ["- kein `add(…)` im Kern."]
+        body += [f"- gemeldet in {Path(files[d][0]).name}, Z. {n}.{card.ref(d, n)}" for d, n in r["emitted"]] or ["- kein `add(…)` im Kern."]
         if r.get("doku_severity"):
             body.append(f"- konfiguration.md führt ihn unter {r['doku_severity'][0]}."
                         + card.ref("konf", r["doku_severity"][1]))
@@ -669,7 +688,7 @@ def cards(inv: dict, files: dict) -> dict[str, dict]:
         body = [f"# Schlüssel `{label}`", ""]
         if k["default"]:
             body.append("Standardwert im Kern (DEFAULT_CONFIG bzw. TYPE_DEFAULTS)."
-                        + "".join(card.ref("kern", n) for n in k["default"][:MAX_HITS]))
+                        + "".join(card.ref(k["default_datei"], n) for n in k["default"][:MAX_HITS]))
         elif k["im_code"]:
             body.append("Ohne Eintrag in DEFAULT_CONFIG; der Code liest ihn mit eigenem Standard.")
         else:
@@ -729,10 +748,10 @@ def cards(inv: dict, files: dict) -> dict[str, dict]:
         for slug in slugs:
             body.append(f"| [{result[slug]['title']}](/concepts/{slug}.md) | {'; '.join(result[slug]['befund']) or '–'} |")
         if not card.refs:   # Fußnote Pflicht: auf die Stelle, die die Liste trägt
-            anchor = {"befehl": lambda: ("kern", inv["befehle"][0]["line"]),
+            anchor = {"befehl": lambda: (inv["befehle"][0]["datei"], inv["befehle"][0]["line"]),
                       "hook": lambda: ("hook", inv["hooks"][0]["line"]),
-                      "regel": lambda: ("kern", next(r["severity_line"] for r in inv["regeln"] if r.get("severity_line"))),
-                      "schluessel": lambda: ("kern", next(k["default"][0] for k in inv["schluessel"] if k["default"]))
+                      "regel": lambda: next((r["severity_datei"], r["severity_line"]) for r in inv["regeln"] if r.get("severity_line")),
+                      "schluessel": lambda: next((k["default_datei"], k["default"][0]) for k in inv["schluessel"] if k["default"])
                       }[kind]()
             body[2] = body[2][:-1] + "." + card.ref(*anchor)
         others = [k for k in titles if k != kind]
@@ -812,7 +831,7 @@ def main(argv=None) -> int:
     if shutil.which("uv") is None:
         raise SystemExit("uv fehlt im PATH")
 
-    probe = git("show", f"{args.rev}:./skills/okfw/okfw.py")
+    probe = git("grep", "-h", "^VERSION = ", args.rev, "--", "skills/okfw/okfw.py", "skills/okfw/okfw_kern/basis.py")
     version = re.search(r'^VERSION = "([^"]+)"', probe, re.M).group(1)
     out = Path(args.out or PLUGIN / ".nachbau" / f"selbstreview-{version}").resolve()
     if out.exists():
@@ -822,7 +841,7 @@ def main(argv=None) -> int:
         shutil.rmtree(out)
     stand = out / "_stand"
     sha, date, tests = stage(args.rev, stand)
-    files = {label: (rel, art) for label, rel, art in DOKU + CODE + tests}
+    files = {label: (rel, art) for label, rel, art in DOKU + CODE + kern_code(stand) + tests}
     print(f"Stand {sha[:12]} ({date}), okfw {version} → {out}")
 
     inv = collect(stand, tests)

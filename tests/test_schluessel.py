@@ -260,7 +260,7 @@ class AbschnittLog(KonfTest):
         self.assertNotIn("(claude-code/", self.zeile_mit("wiki/log.md", "Erstellt"))
         self.setze("[log]", 'show_actor = true')
         self.rebuild()
-        self.assertTrue(self.zeile_mit("wiki/log.md", "Erstellt").endswith("(claude-code/claude-opus-5-5)"))
+        self.assertTrue(self.zeile_mit("wiki/log.md", "Erstellt").endswith("(claude-code/unknown)"))
 
     def test_deprecate_heisst_ueberholt(self):
         self.konzept("k1")
@@ -847,7 +847,7 @@ class BefehlEventUndBody(KonfTest):
         notiz, export = self.ereignisse()[-2:]
         self.assertEqual((notiz["kind"], notiz["page"], notiz["detail"], notiz["by"]),
                          ("note", "concepts/k1", "Eine Notiz", "human:erika"))
-        self.assertEqual((export["detail"], export["by"]), ("", "claude-code/claude-opus-5-5"))   # Standard: [wiki] actor
+        self.assertEqual((export["detail"], export["by"]), ("", "claude-code/unknown"))   # Standard: [wiki] actor
         self.rebuild()
         self.assertIn("* **Notiz**: [Konzept k1](/concepts/k1.md) – Eine Notiz", self.datei_lesen("wiki/log.md"))
         self.assertIn("* **Export**: [Konzept k1]", self.datei_lesen("wiki/log.md"))
@@ -962,7 +962,7 @@ class BefehlNew(KonfTest):
         self.konzept("k1")
         ereignis = self.ereignisse()[-1]
         self.assertEqual((ereignis["kind"], ereignis["page"], ereignis["by"]),
-                         ("create", "concepts/k1", "claude-code/claude-opus-5-5"))
+                         ("create", "concepts/k1", "claude-code/unknown"))
 
     def test_analysis_bekommt_stale_after(self):
         self.core("new", "analysis", "a1", "--title", "A", "--description", "D")
@@ -1065,7 +1065,7 @@ class BefehlFundweg(KonfTest):
         eintrag = self.eintrag()
         self.assertEqual({k: eintrag[k] for k in ("art", "db", "query")},
                          {"art": "suche", "db": "pubmed", "query": "qualität AND bibliothek"})
-        self.assertEqual(eintrag["by"], "claude-code/claude-opus-5-5")
+        self.assertEqual(eintrag["by"], "claude-code/unknown")
         self.assertRegex(eintrag["at"], r"^\d{4}-\d\d-\d\dT[\d:]+Z$")
         self.assertEqual(self.ereignisse()[-1]["detail"], "Fundweg: suche (pubmed)")
         self.assertNotIn("fundweg_incomplete", self.lint_codes("sources/q1"))
@@ -1198,7 +1198,7 @@ class BefehlSourcesQuellenAlias(KonfTest):
         done = self.core("quellen", "concepts/k1", "--add", "q1")      # Alias
         self.assertIn("concepts/k1: Quellen +q1", done.stdout)
         nachher = self.fm("concepts/k1")
-        self.assertEqual(nachher["generated"]["by"], "claude-code/claude-opus-5-5")
+        self.assertEqual(nachher["generated"]["by"], "claude-code/unknown")
         self.assertGreater(nachher["generated"]["at"], "2020-01-01T00:00:00Z")
         self.assertEqual((nachher["status"], nachher["verified"]), ("stable", vorher["verified"]))
         self.assertEqual([s["id"] for s in nachher["sources"]], ["q1"])

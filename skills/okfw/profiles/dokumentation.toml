@@ -5,7 +5,7 @@
 [wiki]
 title = "Wiki – zuerst lesen"
 bundle = "wiki"
-actor = "claude-code/claude-opus-5-5" # generated.by für neue Seiten; WIKI_ACTOR überschreibt
+actor = "claude-code/unknown"   # generated.by für neue Seiten; WIKI_ACTOR überschreibt, in Claude Code nennt der Hook das Modell
 okf_version = "0.2"
 requires_core = "0.1"
 
@@ -17,7 +17,7 @@ protected = []
 [index]
 root = "overview"
 sort = "title"
-entry_tag = "einstieg"                # Lernpfad im Dashboard und Einstiegsseiten im Root-Index
+entry_tag = "einstieg"                # Einstiegsseiten im Root-Index
 start_heading = ""                    # Einstiegsseiten direkt unter dem Titel (der sagt schon „zuerst lesen“)
 badges = ["license"]
 

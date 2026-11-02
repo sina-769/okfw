@@ -1,5 +1,5 @@
 // Führt das Skript einer erzeugten Dashboard-Datei in Node aus, mit einem kleinen Ersatz für das DOM, und bedient
-// Umschalter und Lernpfad wie im Browser. Aufruf: node dashboard_dom.js <datei.html>; Ausgabe: JSON je Umschalter-Stellung.
+// Umschalter und Pfade wie im Browser. Aufruf: node dashboard_dom.js <datei.html>; Ausgabe: JSON je Umschalter-Stellung.
 "use strict";
 const fs = require("fs"), vm = require("vm");
 
@@ -40,7 +40,7 @@ const code = [...html.matchAll(/<script(?: nonce="[^"]*")?>(.*?)<\/script>/gs)].
 const byId = new Map(), bySel = new Map();
 const pick = (map, key) => { if (!map.has(key)) map.set(key, new El("div")); return map.get(key); };
 pick(byId, "okf-data").textContent = data;
-pick(byId, "lernpfad").hidden = true;
+pick(byId, "pfade").hidden = true;
 
 const store = new Map();
 let edit = null;
@@ -59,30 +59,22 @@ vm.runInNewContext(code, sandbox);
 const $ = id => pick(byId, id), byClass = (root, cls) => root.find(e => e.className === cls);
 const buttons = () => $("scope").kids;
 
-// Lernpfad in der gerade gewählten Stellung: was die Kacheln zeigen und was der Gang von „starten“ bis zum Ende sieht
-function lernpfad() {
-  const sec = $("lernpfad"), ol = byClass(sec, "steps");
-  const kacheln = ol.kids.map(li => [byClass(li, "step-n").textContent, byClass(li, "linkish").textContent]);
-  const start = sec.find(e => e.textContent === "Lernpfad starten" && e.tagName === "BUTTON");
-  const gang = [];
-  if (!start.hidden) {
-    start.click();
-    for (let page = $("r-card"); ; byClass(page, "next").click()) {
-      gang.push([byClass(page, "r-path").textContent, page.find(e => e.tagName === "H1").textContent]);
-      if (!byClass(page, "next")) { gang.push(byClass(page, "end").textContent); break; }
-    }
-  }
-  return { abschnitt_sichtbar: !sec.hidden, hinweis: byClass(sec, "note").textContent, start_sichtbar: !start.hidden, kacheln, gang };
+// Was „Lesen“ je Pfad in der gerade gewählten Stellung bekäme
+const bekommen = [];
+sandbox.window.okfwPfad = { lesen: p => bekommen.push(p), starten: p => bekommen.push(p) };
+function pfade() {
+  return $("pfade").find(e => e.tagName === "UL").kids.map(li => {
+    bekommen.length = 0;
+    const lesen = li.find(e => e.tagName === "BUTTON" && e.textContent === "Lesen");
+    lesen.click();
+    return { titel: li.find(e => e.tagName === "STRONG").textContent, zeile: li.find(e => e.tagName === "SMALL").textContent,
+             gesperrt: !!lesen.disabled, befunde: bekommen[0].befunde.map(b => b.karte),
+             stationen: bekommen[0].stationen.map(s => [s.titel, s.elemente.map(e => e.titel || e.art)]) };
+  });
 }
-const ergebnis = { start: lernpfad(), stellungen: {} };
+const ergebnis = { start: pfade(), stellungen: {} };
 for (const b of buttons()) {
   b.click();
-  ergebnis.stellungen[b.textContent] = lernpfad();
-  // eine Seite außerhalb des Umfangs, geöffnet wie über einen Link
-  ergebnis.stellungen[b.textContent].schritt_je_seite = Object.fromEntries(JSON.parse(data).path.map(id => {
-    edit.open(id);
-    const zeile = byClass($("r-card"), "r-path");
-    return [id, zeile ? zeile.textContent : null];
-  }));
+  ergebnis.stellungen[b.textContent] = pfade();
 }
 console.log(JSON.stringify(ergebnis));

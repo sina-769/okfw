@@ -5,7 +5,7 @@
 """Offizielle Literatur-APIs mit Fundprotokoll: Zugangsweg 2 der Literaturrecherche.
 
   api.py suche <dienst> "<suchstring>" --lauf DIR [--max 20] [--by AKTEUR]   # --max bis 2000, seitenweise
-  api.py eintrag DIR --weg modellvorschlag|container|websuche --db DB --query Q --treffer JSON [--by A]
+  api.py eintrag DIR --weg modellvorschlag|container|websuche|tooluniverse --db DB --query Q --treffer JSON --by A
   api.py zusammenfuehren DIR [--json]
   api.py aufloesen DIR <nr> --doi D | --pmid P [--begruendung "…"]   # ohne Begründung nur Vergleich
   api.py fundweg DIR <nr|doi|pmid> --seite sources/<slug> [--root PROJEKT]

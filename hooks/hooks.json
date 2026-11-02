@@ -1,5 +1,5 @@
 {
-  "description": "okfw: Wiki-Status beim Sitzungsstart, Schreibschutz für Rohquellen, Ereignisprotokoll, Projektionen und die Vertrauensfelder status und verified der Wiki-Seiten, Ereignisse und generated bei Write/Edit, Rebuild beim Stop; Lint-Fehler gehen an die Sitzung zurück (höchstens zwei Runden je Sitzung), danach kurze Meldung. Wirkt nur in Projekten mit wiki.toml.",
+  "description": "okfw: Wiki-Status beim Sitzungsstart, Schreibschutz für Rohquellen, Ereignisprotokoll, Projektionen und die Vertrauensfelder status, verified und generated.modelle der Wiki-Seiten, Ereignisse und generated bei Write/Edit, Rebuild beim Stop; Lint-Fehler gehen an die Sitzung zurück (höchstens zwei Runden je Sitzung), danach kurze Meldung. Wirkt nur in Projekten mit wiki.toml.",
   "hooks": {
     "SessionStart": [
       {

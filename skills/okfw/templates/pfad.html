@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="__POLICY__">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+/*__STIL__*/
+main.pf-start { max-width: 46rem; margin: 0 auto; padding: 48px 16px; }
+main.pf-start h1 { margin: 0 0 8px; }
+main.pf-start .tun { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0; }
+main.pf-start small { color: var(--muted); }
+</style>
+<script>
+  (() => {
+    let t = null;
+    try { t = localStorage.getItem("okfw-theme"); } catch (e) { t = null; }
+    if (t !== "light" && t !== "dark") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
+</head>
+<body>
+<main class="pf-start" id="start"></main>
+<script type="application/json" id="okf-pfad">__DATA__</script>
+<script>
+/*__PFAD_JS__*/
+(() => {
+  "use strict";
+  const D = JSON.parse(document.getElementById("okf-pfad").textContent);
+  const pfad = { ...D.pfad, stand: D.stand };
+  const start = document.getElementById("start");
+  const el = (tag, text, cls) => { const e = document.createElement(tag); if (text) e.textContent = text; if (cls) e.className = cls; return e; };
+  const knopf = (text, cls, fn) => { const b = el("button", text, cls); b.type = "button"; b.addEventListener("click", fn); return b; };
+  start.append(el("h1", pfad.titel));
+  if (pfad.beschreibung) start.append(el("p", pfad.beschreibung));
+  const tun = el("div", "", "tun");
+  tun.append(knopf("Vortrag starten", "btn-primary", () => window.okfwPfad.starten(pfad, D.karten)),
+    knopf("Lesen", "ghost", () => window.okfwPfad.lesen(pfad, D.karten)));
+  start.append(tun, el("small", `${pfad.stationen.length} Stationen aus „${D.titel}“. Stand ${D.stand}: Diese Datei weiß nicht, was sich danach geändert hat.`));
+})();
+</script>
+</body>
+</html>
