@@ -30,7 +30,9 @@ Pflichtfelder, Ereignisort, Exporte). Ohne wiki.toml schreibt der Kern nichts.
   okfw.py fundweg <seite> --art suche|modellvorschlag|material|person|zitatverfolgung
                  [--db DB --query Q] [--von SLUG] [--at ZEIT] [--by AKTEUR] [--add]
   okfw.py fundweg <seite> --aus-lauf LAUF --kandidat N [--add]
-  okfw.py abbildung <name> --file x.svg [--ersetzen] [--rolle R [--modell M]]
+  okfw.py abbildung <name> --file x.svg|x.webp [--ersetzen] [--rolle R [--modell M]]
+  okfw.py bild <name> --prompt TEXT [--wunsch WORTE] [--format F] [--tempo entwurf|fein] [--ohne X]… [--seed N]
+                      [--varianten N] [--[no-]text] [--stil S] [--titel T] [--ersetzen] [--trocken]
   okfw.py rechte [<seite>] [--aktion abbildung] [--json]
   okfw.py lizenz <seite> --name N [--url U] [--class K] [--via V] [--dry-run] | --fetch [--force] | --missing --fetch [--dry-run]
   okfw.py dashboard [--out PFAD] [--oeffentlich] [--open]
@@ -61,7 +63,7 @@ import yaml
 from .basis import (AUFTRAEGE, ConfigMissing, FIGURES_DIR, FigureError, PAPIERKORB, RetractionFound, SKILL_DIR, SLUG_RE, SOURCE_TYPE,
                     STATUS, VERSION, WikiError, as_list, replace_file)
 from .frontmatter import MODELL_UNBEKANNT, load_yaml
-from .bereinigung import FIGURE_MAX_BYTES, clean_svg, svg_verlust
+from .bereinigung import FIGURE_MAX_BYTES, RASTER_MAX_BYTES, clean_svg, clean_webp, svg_verlust
 from .rechte import LICENSE_CLASSES, RIGHTS_ACTIONS, RIGHT_VALUES, RIGHT_WORDS, classify_license
 from .konfig import FUNDWEG_ARTEN, SEVERITY_ORDER
 from .quellen import kandidat_abgleich, kennungen, notice_kind, notice_text, today_parts
@@ -474,36 +476,135 @@ def cmd_fundweg(wiki: Wiki, args) -> int:
     return 0
 
 
+def figure_target(wiki: Wiki, name: str, ext: str, ersetzen: bool) -> tuple[Path, bool]:
+    """Zielpfad der Abbildung; ein Name gilt für genau eine Datei, ersetzt wird nur im selben Format."""
+    if not SLUG_RE.fullmatch(name):
+        raise WikiError(f"Ungültiger Name {name!r}: nur kebab-case (a-z, 0-9, -)")
+    target = wiki.figure_file(name, ext)
+    if target.is_symlink() or not wiki._in_bundle(target):
+        raise WikiError(f"{target} ist ein Symlink oder liegt außerhalb des Bundles: nicht geschrieben")
+    andere = [p for p in wiki.figure_taken(name) if p != target]
+    if andere:
+        raise WikiError(f"{wiki.rel(andere[0])} belegt den Namen {name} schon in einem anderen Format: anderen Namen wählen")
+    existed = target.exists()
+    if existed and not ersetzen:
+        raise WikiError(f"{wiki.rel(target)} existiert schon; mit --ersetzen überschreiben")
+    return target, existed
+
+
 def cmd_abbildung(wiki: Wiki, args) -> int:
-    if not SLUG_RE.fullmatch(args.name):
-        raise WikiError(f"Ungültiger Name {args.name!r}: nur kebab-case (a-z, 0-9, -)")
     vermerk = rollen_vermerk(wiki, args.rolle, args.modell)
+    bild = None
+    if args.anfrage:
+        if not args.rolle:
+            raise WikiError("--anfrage gilt nur mit --rolle")
+        try:
+            roh = Path(args.anfrage).expanduser().read_text(encoding="utf-8")
+            if len(roh) > 64 * 1024:
+                raise WikiError("--anfrage: höchstens 64 KB")
+            bild = json.loads(roh)
+        except (OSError, ValueError) as exc:
+            raise WikiError(f"--anfrage: kein lesbares JSON ({exc})") from exc
+        if not isinstance(bild, dict):
+            raise WikiError("--anfrage: ein JSON-Objekt")
     source = Path(args.file).expanduser()
     if not source.is_file():
         raise WikiError(f"Keine Datei: {source}")
-    if source.stat().st_size > FIGURE_MAX_BYTES:
-        raise WikiError(f"{source} ist größer als {FIGURE_MAX_BYTES // 1024} KB: Abbildung vereinfachen")
+    with source.open("rb") as f:
+        kopf = f.read(12)
+    raster = kopf[:4] == b"RIFF" and kopf[8:12] == b"WEBP"
+    if not raster and (kopf[:8] == b"\x89PNG\r\n\x1a\n" or kopf[:3] == b"\xff\xd8\xff"):
+        raise WikiError(f"{source}: PNG und JPEG erst in WebP umwandeln, etwa `cwebp -q 80 bild.png -o bild.webp`")
+    limit = RASTER_MAX_BYTES if raster else FIGURE_MAX_BYTES
+    if source.stat().st_size > limit:
+        raise WikiError(f"{source} ist größer als {limit // 1024} KB: " + ("Bild verkleinern" if raster else "Abbildung vereinfachen"))
     try:
-        svg, removed = clean_svg(source.read_bytes())
+        if raster:
+            inhalt, (w, h), removed = clean_webp(source.read_bytes())
+        else:
+            svg, removed = clean_svg(source.read_bytes())
+            inhalt = svg + "\n"
     except FigureError as exc:
         raise WikiError(f"{source} abgelehnt: {exc}") from exc
-    target = wiki.figure_file(args.name)
-    if target.is_symlink() or not wiki._in_bundle(target):
-        raise WikiError(f"{target} ist ein Symlink oder liegt außerhalb des Bundles: nicht geschrieben")
-    existed = target.exists()
-    if existed and not args.ersetzen:
-        raise WikiError(f"{wiki.rel(target)} existiert schon; mit --ersetzen überschreiben")
+    ext = "webp" if raster else "svg"
+    target, existed = figure_target(wiki, args.name, ext, args.ersetzen)
     target.parent.mkdir(parents=True, exist_ok=True)
-    replace_file(target, svg + "\n")
+    replace_file(target, inhalt)
     wiki.append_event("update" if existed else "create", f"{FIGURES_DIR}/{args.name}",
-                      f"Abbildung {wiki.rel(target)} ({target.stat().st_size} Byte)", modelle=[vermerk] if vermerk else None)
+                      f"Abbildung {wiki.rel(target)} ({target.stat().st_size} Byte)", modelle=[vermerk] if vermerk else None, bild=bild)
     if removed:
-        print(f"okfw: Achtung: aus dem SVG entfernt: {', '.join(removed)}", file=sys.stderr)
-        for hinweis in svg_verlust(removed)["hinweise"]:
+        print(f"okfw: Achtung: aus dem {ext.upper()} entfernt: {', '.join(removed)}", file=sys.stderr)
+        for hinweis in [] if raster else svg_verlust(removed)["hinweise"]:
             print(f"okfw: {hinweis}", file=sys.stderr)
-    print(f"abgelegt: {wiki.rel(target)} ({target.stat().st_size} Byte)\n"
-          f"Einbinden: ![Titel](/{FIGURES_DIR}/{args.name}.svg)\n"
+    print(f"abgelegt: {wiki.rel(target)} ({target.stat().st_size} Byte" + (f", {w}x{h}" if raster else "") + ")\n"
+          f"Einbinden: ![Titel](/{FIGURES_DIR}/{args.name}.{ext})\n"
           "           *Abb.: Was sie zeigt. Eigene Darstellung nach Müller[^mueller].*")
+    return 0
+
+
+def cmd_bild(wiki: Wiki, args) -> int:
+    import rollen
+    from .bild import BildFehler, planen, unterschrift
+    try:
+        plan = planen(args.prompt, wunsch_text=args.wunsch or "", stile=wiki.cfg["bild"]["stile"], format=args.format,
+                      tempo=args.tempo, ohne=args.ohne, seed=args.seed, varianten=args.varianten, mit_text=args.text, stil=args.stil)
+    except BildFehler as exc:
+        raise WikiError(str(exc)) from exc
+    a, w, varianten = plan, plan["erkannt"], plan["varianten"]
+    namen = [args.name] if varianten == 1 else [f"{args.name}-{i}" for i in range(1, varianten + 1)]
+    ziele = [figure_target(wiki, n, "webp", args.ersetzen) for n in namen]
+    try:
+        cfg = rollen.lade(wiki.config_path)
+        ziel = rollen.loese(cfg, "bild")
+    except rollen.Fehler as exc:
+        raise WikiError(f"Rolle bild: {exc}") from exc
+    anbieter = cfg["anbieter"].get(ziel["anbieter"], {})
+    seed = a["nutzlast"]["seed"]
+    gesendet = {"model": ziel["modell"], **a["nutzlast"]}
+    erkannt = ", ".join(f"{k}: {v}" for k, v in w.items())
+    print(f"Modell: {ziel['modell'] or '–'} · Anbieter: {anbieter.get('name', ziel['anbieter'])} · Datenklasse des Wikis: {cfg['daten']}"
+          + (f"\nAus dem Wunsch erkannt: {erkannt}" if erkannt else "")
+          + "".join(f"\n  {e}" for e in a["erklaerung"])
+          + "".join(f"\nHinweis: {h}" for h in a["hinweise"])
+          + "\nNicht in den Prompt: Personenbezogenes, reale Personen; der Prompt geht an den Anbieter."
+          + "\nWas gesendet wird (ohne Key):\n" + json.dumps(gesendet, ensure_ascii=False, indent=1))
+    if ziel["gesperrt"]:
+        raise WikiError(f"Rolle bild gesperrt: {ziel['gesperrt']}. Einrichten in `okfw.py serve` (Einstellungen) oder "
+                        "`rollen.py setze bild --harness direkt --anbieter <id> --modell <modell>`")
+    if args.trocken:
+        return 0
+    try:
+        key = rollen.schluessel_holen(anbieter)
+        if not key and rollen.schluessel_quelle(anbieter) == "fehlt":
+            raise rollen.Fehler(rollen.schluessel_anleitung(ziel["anbieter"], anbieter))
+    except rollen.Fehler as exc:
+        raise WikiError(str(exc)) from exc
+    vermerk = {"harness": ziel["harness"], "anbieter": ziel["anbieter"], "modell": ziel["modell"], "rolle": "bild", "art": "entwurf"}
+    datum = dt.date.today().isoformat()
+    for i, (name, (target, existed)) in enumerate(zip(namen, ziele)):
+        nutzlast = {**a["nutzlast"], "seed": seed + i}
+        print(f"\n{name}: sende … (etwa {a['sekunden']} s)", flush=True)
+        start = time.monotonic()
+        try:
+            roh, meta = rollen.bild_direkt(ziel, anbieter, key, nutzlast)
+            data, (bw, bh), _ = clean_webp(roh)
+        except rollen.Fehler as exc:
+            raise WikiError(f"{name}: {rollen.schwaerzen(str(exc), key)}") from exc
+        except FigureError as exc:
+            raise WikiError(f"{name}: Die Antwort ist kein brauchbares WebP ({exc}); gibt der Anbieter output_format webp aus?") from exc
+        dauer = round(time.monotonic() - start, 1)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        replace_file(target, data)
+        wiki.append_event("update" if existed else "create", f"{FIGURES_DIR}/{name}",
+                          f"Bild {wiki.rel(target)} ({len(data)} Byte, {bw}x{bh}, Seed {nutzlast['seed']})", modelle=[vermerk],
+                          bild={"anbieter": ziel["anbieter"], "endpunkt": "POST /images/generations", "modell": ziel["modell"],
+                                "anfrage": nutzlast, "dauer_s": dauer,
+                                **({"antwort": meta} if meta else {})})
+        print(f"abgelegt: {wiki.rel(target)} ({len(data) // 1024} KB, {bw}x{bh}, Seed {nutzlast['seed']}, {dauer} s)\n"
+              f"Einbinden: ![{args.titel or 'Titel'}](/{FIGURES_DIR}/{name}.webp)\n"
+              f"           {unterschrift(args.titel or 'Was es zeigt', ziel['modell'], anbieter.get('name', ziel['anbieter']), datum)}")
+    if varianten > 1:
+        print("\nNicht gewählte Varianten bleiben liegen, bis sie jemand löscht; dieselbe lässt sich mit --seed wieder erzeugen.")
     return 0
 
 
@@ -772,13 +873,31 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--kandidat", help="mit --aus-lauf: Nr, DOI oder PMID des Kandidaten")
     p.set_defaults(func=cmd_fundweg)
 
-    p = sub.add_parser("abbildung", help="SVG-Schaubild prüfen, bereinigen und unter <bundle>/abbildungen/ ablegen")
-    p.add_argument("name", help="Dateiname ohne .svg, kebab-case")
-    p.add_argument("--file", required=True, help="SVG-Datei, höchstens 200 KB")
+    p = sub.add_parser("abbildung", help="SVG-Schaubild oder WebP-Bild prüfen, bereinigen und unter <bundle>/abbildungen/ ablegen")
+    p.add_argument("name", help="Dateiname ohne Endung, kebab-case")
+    p.add_argument("--file", required=True, help="SVG-Datei (höchstens 200 KB) oder WebP (höchstens 1 MB)")
     p.add_argument("--ersetzen", action="store_true", help="eine vorhandene Abbildung gleichen Namens überschreiben")
     p.add_argument("--rolle", help="Das Bild stammt von einem Modell dieser Rolle: Das Ereignis nennt es, Lint figure_generated prüft die Unterschrift")
     p.add_argument("--modell", help="mit --rolle: Modell, wenn die Rolle in der Sitzung lief")
+    p.add_argument("--anfrage", help="mit --rolle: JSON der Anfrage, die das Bild erzeugt hat (Seed …); steht im Ereignis")
     p.set_defaults(func=cmd_abbildung)
+
+    p = sub.add_parser("bild", help="Rasterbild von einem Bildmodell (Rolle bild) erzeugen und als WebP unter <bundle>/abbildungen/ ablegen")
+    p.add_argument("name", help="Dateiname ohne Endung, kebab-case; mit --varianten <name>-1, <name>-2 …")
+    p.add_argument("--prompt", required=True, help="Was zu sehen sein soll: Motiv, Anordnung, Material, Licht, Stil")
+    p.add_argument("--wunsch", help="Einstellungen in Worten, etwa „breit, Entwurf, ohne Menschen, drei Varianten“")
+    p.add_argument("--titel", help="Titel für Einbindung und Bildunterschrift")
+    p.add_argument("--format", help="quadrat, quer, hoch, gross, 4:3, 3:2 oder BREITExHÖHE (auf Vielfache von 16 gerundet)")
+    p.add_argument("--tempo", choices=["entwurf", "fein"], help="entwurf: 8 Schritte, Sekunden; fein: Vorgabe des Modells")
+    p.add_argument("--ohne", action="append", help="was nicht im Bild sein soll (mehrfach); setzt Negativ-Prompt und Guidance 4")
+    p.add_argument("--seed", type=int, help="gleiche Zahl und Einstellungen: gleiches Bild; ohne Angabe zufällig")
+    p.add_argument("--varianten", type=int, help="mehrere Bilder mit Seed, Seed+1 … (höchstens 4)")
+    p.add_argument("--text", action=argparse.BooleanOptionalAction, default=None,
+                   help="Schrift im Bild zulassen; ohne hängt okfw „no text“ an")
+    p.add_argument("--stil", help="Stil: eigener aus [bild.stile] der wiki.toml oder foto, linolschnitt, risografie, …")
+    p.add_argument("--ersetzen", action="store_true", help="vorhandenes WebP gleichen Namens überschreiben")
+    p.add_argument("--trocken", action="store_true", help="nur zeigen, was gesendet würde")
+    p.set_defaults(func=cmd_bild)
 
     p = sub.add_parser("sources", aliases=["quellen"], help="sources[] einer Seite ergänzen oder kürzen")
     p.add_argument("page")

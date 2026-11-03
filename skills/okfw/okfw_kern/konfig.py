@@ -37,6 +37,8 @@ DEFAULT_CONFIG = {
     # Modellrollen (rollen.py): Datenklasse des Wikis und gesperrte Anbieter; je Rolle eine freie Tabelle
     # [rollen.lesen] harness, anbieter, modell, die rollen.py prüft
     "rollen": {"daten": "", "sperre": []},
+    # Befehl bild: eigene Stilvorlagen, Name → Text; {motiv} steht für den Prompt, sonst wird die Vorlage angehängt
+    "bild": {"stile": {}},
 }
 TYPE_DEFAULTS = {"folder": "", "label": "", "description": "", "required": [], "recommended": ["title", "description"],
                  "sections": [], "min_links": 2, "needs_footnotes": False, "stale_months": 0, "template": "",

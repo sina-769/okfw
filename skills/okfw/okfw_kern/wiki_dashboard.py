@@ -1,16 +1,18 @@
 """Wiki: Dashboard (Daten, Leseansicht, Schaubilder, Design) und seine Textbausteine."""
 
+import base64
 import html
 import json
+import os
 import re
 import secrets
 import shlex
 from collections import Counter
 from pathlib import Path
 
-from .basis import (ACTOR_RE, CHECK_RE, CODE_RE, FIGURES_DIR, FIGURE_SRC_RE, FOOTNOTE_DEF_RE, FOOTNOTE_REF_RE, FigureError, IMAGE_RE, Page, SKILL_DIR,
+from .basis import (ACTOR_RE, CHECK_RE, CODE_RE, FIGURES_DIR, FIGURE_EXTS, FIGURE_SRC_RE, FOOTNOTE_DEF_RE, FOOTNOTE_REF_RE, FigureError, IMAGE_RE, Page, SKILL_DIR,
                     SOURCE_TYPE, VERIFIED_HASH, VERSION, WikiError, as_datetime, as_list, is_empty, now_iso, one_line, replace_file)
-from .bereinigung import FIGURE_MAX_BYTES, LINK_SCHEMES, clean_svg, css_problem, link_scheme, safe_link
+from .bereinigung import FIGURE_MAX_BYTES, LINK_SCHEMES, RASTER_MAX_BYTES, clean_svg, clean_webp, css_problem, link_scheme, safe_link
 from .frontmatter import MODELL_ARTEN, MODELL_KENNUNG, body_sha256
 from .rechte import LICENSE_CLASSES, RIGHTS_ACTIONS
 from .konfig import FUNDWEG_ARTEN
@@ -203,8 +205,12 @@ class WikiDashboard:
             raise WikiError(f"[dashboard] design: {rel} {problem}")
         return css
 
-    def figure_file(self, name: str) -> Path:
-        return self.bundle / FIGURES_DIR / f"{name}.svg"
+    def figure_file(self, name: str, ext: str = "svg") -> Path:
+        return self.bundle / FIGURES_DIR / f"{name}.{ext}"
+
+    def figure_taken(self, name: str) -> list[Path]:
+        """Dateien, die den Namen schon belegen (auch als Symlink): Ein Name gilt für genau eine Abbildung."""
+        return [p for p in (self.figure_file(name, e) for e in FIGURE_EXTS) if os.path.lexists(p)]
 
     def figure_refs(self, body: str) -> list[dict]:
         """Bildverweise auf Schaubilder im Text (nicht in Code): {name, alt, caption} mit der Zeile darunter."""
@@ -214,7 +220,7 @@ class WikiDashboard:
             for m in IMAGE_RE.finditer(line):
                 src = FIGURE_SRC_RE.match(m.group(2))
                 if src:
-                    out.append({"name": src.group(1), "alt": m.group(1),
+                    out.append({"name": src.group(1), "ext": src.group(2), "alt": m.group(1),
                                 "caption": lines[i + 1] if i + 1 < len(lines) else ""})
         return out
 
@@ -228,6 +234,21 @@ class WikiDashboard:
         if path.stat().st_size > FIGURE_MAX_BYTES:   # gar nicht erst einlesen
             raise FigureError(f"größer als {FIGURE_MAX_BYTES // 1024} KB")
         return clean_svg(path.read_bytes(), prefix, label)
+
+    def figure_webp(self, name: str) -> tuple[bytes, tuple[int, int]]:
+        """Bereinigtes WebP der Abbildung `name` (clean_webp) mit Bildmaß; FigureError wie figure_svg."""
+        path = self.figure_file(name, "webp")
+        if not path.is_file():
+            raise FigureError(f"{self.rel(path)} fehlt")
+        if not self._in_bundle(path):
+            raise FigureError(f"{self.rel(path)} liegt außerhalb des Bundles")
+        if path.stat().st_size > RASTER_MAX_BYTES:
+            raise FigureError(f"größer als {RASTER_MAX_BYTES // 1024} KB")
+        data, size, _ = clean_webp(path.read_bytes())
+        return data, size
+
+    def figure_check(self, name: str, ext: str) -> None:
+        self.figure_svg(name) if ext == "svg" else self.figure_webp(name)
 
     def page_refs(self, page: Page, by_path: dict) -> list[tuple[str, "Page | None", object]]:
         """(Label, Quellenkarte oder None, Eintrag) je sources-Eintrag. Bloße Slugs (Altform) werden
@@ -732,9 +753,13 @@ class WikiDashboard:
         return out
 
     def figures_html(self, rendered: str) -> str:
-        """Bilder im gerenderten Text: Schaubilder (`/abbildungen/<name>.svg`) werden bereinigt als `<figure>` mit
-        `<figcaption>` eingebettet (die Zeile `*Abb. …*` darunter ist die Bildunterschrift); fehlt die Datei oder wird sie
-        abgelehnt, steht „Abbildung nicht eingebunden: <name>“. Jedes andere Bild wird nie geladen, es erscheint als Text."""
+        """Bilder im gerenderten Text: Abbildungen (`/abbildungen/<name>.svg` oder `.webp`) werden bereinigt als `<figure>`
+        mit `<figcaption>` eingebettet (die Zeile `*Abb. …*` darunter ist die Bildunterschrift), WebP als `data:`; fehlt
+        die Datei oder wird sie abgelehnt, steht „Abbildung nicht eingebunden: <name>“. Jedes andere Bild wird nie
+        geladen, es erscheint als Text."""
+        eigene: list[str] = []   # eingebettete <img> (WebP): erst nach dem Ersetzen fremder Bilder einsetzen
+        rendered = rendered.replace("\x01", "")   # die Platzhalter kann so kein Text vortäuschen
+
         def attr(tag: str, name: str) -> str:
             m = re.search(rf'\b{name}="([^"]*)"', tag)
             return html.unescape(m.group(1)) if m else ""
@@ -744,10 +769,16 @@ class WikiDashboard:
             found = FIGURE_SRC_RE.match(src)
             if not found:
                 return m.group(0)
-            name, caption = found.group(1), m.group("cap") or m.group("cap2")
+            name, ext, caption = found.group(1), found.group(2), m.group("cap") or m.group("cap2")
             self.figure_count += 1
             try:
-                inner = self.figure_svg(name, prefix=f"abb{self.figure_count}-", label=attr(tag, "alt"))[0]
+                if ext == "svg":
+                    inner = self.figure_svg(name, prefix=f"abb{self.figure_count}-", label=attr(tag, "alt"))[0]
+                else:
+                    data, (w, h) = self.figure_webp(name)
+                    eigene.append(f'<img class="raster" src="data:image/webp;base64,{base64.b64encode(data).decode()}" '
+                                  f'alt="{html.escape(attr(tag, "alt"))}" width="{w}" height="{h}">')
+                    inner = f"\x01abb{len(eigene) - 1}\x01"
             except FigureError:
                 inner = f'<span class="abb-fehlt">Abbildung nicht eingebunden: {html.escape(name)}</span>'
             return (f'<figure class="abbildung"{m.group("attrs")}>{inner}'
@@ -761,7 +792,8 @@ class WikiDashboard:
         rendered = re.sub(r"<p(?P<attrs>[^>]*)>\s*(?P<img><img\b[^>]*>)\s*"
                           r"(?:<em>(?P<cap>Abb\.(?:(?!</p>).)*?)</em>\s*)?</p>"
                           r"(?:\s*<p>\s*<em>(?P<cap2>Abb\.(?:(?!</p>).)*?)</em>\s*</p>)?", figure, rendered, flags=re.S)
-        return re.sub(r"<img\b[^>]*>", as_text, rendered)
+        rendered = re.sub(r"<img\b[^>]*>", as_text, rendered)
+        return re.sub(r"\x01abb(\d+)\x01", lambda m: eigene[int(m.group(1))], rendered)
 
     def dashboard_path(self, public: bool = False) -> Path:
         spec = self.cfg["dashboard"]

@@ -478,7 +478,8 @@
     const inhalt = h("div", {}, herkunft,
       h("div", { class: "okfw-bar" }, toggle,
         h("button", { class: "ghost", type: "button", onclick: fussnote }, "Fußnote einfügen"),
-        h("button", { class: "ghost", type: "button", onclick: abbildung }, "Abbildung einfügen")),
+        h("button", { class: "ghost", type: "button", onclick: abbildung }, "Abbildung einfügen"),
+        h("button", { class: "ghost", type: "button", onclick: () => window.okfwBild.oeffnen(einbinden) }, "Bild erzeugen")),
       ta, prev,
       h("h3", {}, "Änderung beschreiben"),
       h("p", { class: "okfw-note" }, "Ein Modell schlägt eine neue Fassung vor. Du siehst den Vergleich und entscheidest; es wird nur diese Seite gesendet."),
@@ -987,7 +988,7 @@
     const layer = openLayer("Einstellungen");
     layer.el.dataset.okfw = "settings";
     const body = h("div", {});
-    const names = { lesen: "Lesen", gegenpruefen: "Gegenprüfen", bearbeiten: "Bearbeiten per Prompt", webabruf: "Webabruf" };
+    const names = { lesen: "Lesen", gegenpruefen: "Gegenprüfen", bearbeiten: "Bearbeiten per Prompt", webabruf: "Webabruf", bild: "Bilder erzeugen" };
     let current = "rollen";
     const took = res => { if (!res.ok) { fail(res); return false; } S = res.data; show(current); return true; };
 
@@ -997,8 +998,8 @@
         h("p", { class: "okfw-note" }, `Datenklasse dieses Wikis: ${S.daten}${S.sperre.length ? "; gesperrt: " + S.sperre.join(", ") : ""}. Anbieter, die diese Klasse nicht verarbeiten dürfen, sind ausgegraut. Eine Claude-Code-Sitzung läuft von hier aus über: ${S.sitzung}.`)];
       if (S.warnungen.length) out.push(h("div", { class: "okfw-warn" }, S.warnungen.map(w => h("div", {}, w))));
       for (const rid of Object.keys(names)) {
-        const ro = S.rollen[rid], web = rid === "webabruf";
-        const hs = h("select", { id: `okfw-h-${rid}`, disabled: web }, Object.entries(S.harnesse).filter(([k]) => web ? k === "container" : k !== "container").map(([k, v]) => {
+        const ro = S.rollen[rid], web = rid === "webabruf", bild = rid === "bild";
+        const hs = h("select", { id: `okfw-h-${rid}`, disabled: web }, Object.entries(S.harnesse).filter(([k]) => web ? k === "container" : bild ? k === "direkt" : k !== "container").map(([k, v]) => {
           const off = v.zustand === "fehlt" || (rid === "bearbeiten" && k === "sitzung");
           return h("option", { value: k, selected: k === ro.harness, disabled: off },
             v.name + (v.zustand === "fehlt" ? ` (nicht installiert: ${v.programm})` : rid === "bearbeiten" && k === "sitzung" ? " (der Server kann sie nicht bedienen)" : ""));
@@ -1010,7 +1011,7 @@
         const fillAnbieter = () => {
           const formen = S.harnesse_info[hs.value].formen;
           an.replaceChildren(...Object.entries(S.anbieter).map(([k, a]) => {
-            const passt = ["sitzung", "container"].includes(hs.value) || a.formen.some(f => formen.includes(f));
+            const passt = ["sitzung", "container"].includes(hs.value) || (bild ? a.formen.includes("openai") : a.formen.some(f => formen.includes(f)));
             const andereSitzung = hs.value === "sitzung" && k !== S.sitzung && k !== "anthropic";   // anthropic ist die Vorgabe und folgt der Sitzung
             const grund = !passt ? "passt nicht zur Harness" : andereSitzung ? `die Sitzung läuft über ${S.sitzung}; dafür opencode oder direkt wählen` : a.gesperrt ? "für die Datenklasse dieses Wikis gesperrt" : "";
             return h("option", { value: k, selected: k === ro.anbieter, disabled: !!grund && !web }, a.name + (grund && !web ? ` (${grund})` : ""));
@@ -1022,7 +1023,7 @@
         hs.addEventListener("change", fillAnbieter);
         const laden = h("button", { class: "ghost", type: "button", onclick: async () => {
           laden.disabled = true; laden.textContent = "Lädt …";
-          const m = await api(`api/modelle?anbieter=${encodeURIComponent(an.value)}`);
+          const m = await api(`api/modelle?anbieter=${encodeURIComponent(an.value)}${bild ? "&bild=1" : ""}`);
           laden.disabled = false; laden.textContent = "Modelle laden";
           if (!m.ok) { why.textContent = m.data.fehler || "Modellliste nicht erreichbar"; return; }
           dl.replaceChildren(...m.data.modelle.map(x => h("option", { value: x })));

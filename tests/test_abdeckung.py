@@ -8,8 +8,11 @@ nennt ihn so, wie ein Test ihn benutzt. Textsuche, deterministisch, ohne Netz un
 """
 
 import json
+import os
 import re
+import shutil
 import subprocess
+import tempfile
 import unittest
 
 from . import selbstreview
@@ -107,6 +110,112 @@ class Abdeckung(unittest.TestCase):
         kern = re.search(r'^VERSION = "(\d+\.\d+)\.', (PLUGIN / "skills/okfw/okfw_kern/basis.py").read_text(encoding="utf-8"), re.M).group(1)
         plugin = json.loads((PLUGIN / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
         self.assertEqual(kern, plugin.rsplit(".", 1)[0])
+
+
+class Anleitung(unittest.TestCase):
+    """Die Anleitung für Agenten (.claude/CLAUDE.md), die Richtungsdatei und der eine Prüfeinstieg bleiben bei dem, was es gibt.
+
+    Was CLAUDE.md in Backticks als Pfad oder Befehl nennt, muss existieren; der Prüfeinstieg ist ausführbar, die CI
+    ruft nur ihn auf, und docs/richtung.md hat lückenlos nummerierte Klauseln, die auf bestehende Stellen verweisen."""
+
+    # Pfade, die CLAUDE.md nennt und die hier bewusst nicht liegen: Pfad → Grund
+    NICHT_IM_REPO = {
+        ".claude/skills/": "nur im privaten Arbeitsrepo; export-ignore in .gitattributes",
+        "wiki.toml": "Datei des Projekts, in dem okfw läuft",
+    }
+    PFAD = re.compile(r"^[\w.\-/]+$")
+    ENDUNGEN = (".md", ".sh", ".py", ".json", ".yml", ".toml")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.claude = (PLUGIN / ".claude/CLAUDE.md").read_text(encoding="utf-8")
+
+    def text(self, rel: str) -> str:
+        return (PLUGIN / rel).read_text(encoding="utf-8")
+
+    @staticmethod
+    def ohne_codebloecke(text: str) -> str:
+        return re.sub(r"^```.*?^```", "", text, flags=re.S | re.M)
+
+    def genannte_pfade(self, text: str) -> list[str]:
+        spans = re.findall(r"`([^`\n]+)`", self.ohne_codebloecke(text))
+        return sorted({s for s in spans if self.PFAD.match(s) and ("/" in s or s.endswith(self.ENDUNGEN))})
+
+    def test_genannte_pfade_gibt_es(self):
+        pfade = self.genannte_pfade(self.claude)
+        self.assertIn("tests/pruefen.sh", pfade)
+        for pfad in pfade:
+            if pfad in self.NICHT_IM_REPO:
+                continue
+            with self.subTest(pfad=pfad):
+                self.assertTrue((PLUGIN / pfad).exists(), f"CLAUDE.md nennt {pfad}, den es nicht gibt")
+
+    def test_ausnahmen_der_anleitung_sind_noch_noetig(self):
+        genannt = set(self.genannte_pfade(self.claude))
+        self.assertEqual(sorted(set(self.NICHT_IM_REPO) - genannt), [], "Ausnahme ohne Nennung in CLAUDE.md: streichen")
+
+    def test_befehle_in_bash_bloecken_gibt_es(self):
+        bloecke = re.findall(r"^```bash\n(.*?)^```", self.claude, flags=re.S | re.M)
+        self.assertTrue(bloecke, "CLAUDE.md nennt den Prüfbefehl in einem bash-Block")
+        for zeile in "".join(bloecke).splitlines():
+            erstes = zeile.split()[0] if zeile.split() else ""
+            if erstes:
+                with self.subTest(befehl=zeile):
+                    self.assertTrue((PLUGIN / erstes).is_file() or shutil.which(erstes), f"{erstes} gibt es nicht")
+
+    def test_anleitung_ist_kurz(self):
+        self.assertLessEqual(len(self.claude.splitlines()), 90, "CLAUDE.md soll bei etwa 80 Zeilen bleiben")
+
+    def test_anleitung_nennt_zweige_und_richtung(self):
+        for wort in ("`main`", "Feature-Zweige", "docs/richtung.md", "Co-Authored-By", "Reviewed-by", "Tested-by", ".claude/skills/"):
+            with self.subTest(wort=wort):
+                self.assertIn(wort, self.claude)
+
+    def test_pruefeinstieg_ist_ausfuehrbar_und_einzig(self):
+        skript = PLUGIN / "tests" / "pruefen.sh"
+        self.assertTrue(os.access(skript, os.X_OK), "tests/pruefen.sh ist nicht ausführbar")
+        inhalt = skript.read_text(encoding="utf-8")
+        for befehl in ("python -m unittest", "skills/web-zugriff/scripts/tests/test_pruefung.py"):
+            self.assertIn(befehl, inhalt)
+        schritte = re.findall(r"^\s*-?\s*run:\s*(.+)$", self.text(".github/workflows/tests.yml"), flags=re.M)
+        self.assertEqual(schritte, ["tests/pruefen.sh"], "die CI ruft nur den Prüfeinstieg auf")
+        self.assertIn("tests/pruefen.sh", self.text("docs/entwicklung.md"))
+
+    def test_pruefeinstieg_scheitert_ohne_uv(self):
+        """Ein fehlendes Werkzeug ist ein Fehler, kein stilles Grün."""
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("bash fehlt im PATH")
+        with tempfile.TemporaryDirectory(prefix="okfw-leer-") as leer:
+            done = subprocess.run([bash, str(PLUGIN / "tests" / "pruefen.sh")], env={"PATH": leer},
+                                  capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("uv fehlt", done.stderr)
+
+    def test_changelog_beginnt_mit_unveroeffentlicht_oder_einer_version(self):
+        erste = next(z for z in self.text("CHANGELOG.md").splitlines() if z.startswith("## "))
+        self.assertRegex(erste, r"^## (Unveröffentlicht|\d+\.\d+\.\d+ · \d+\.\d+\.\d{4})$")
+
+    def test_pr_vorlage_hat_die_abschnitte(self):
+        vorlage = self.text(".github/pull_request_template.md")
+        for titel in ("Plan", "Änderungen", "Abweichungen vom Plan", "Prüfergebnis", "Beteiligte Modelle"):
+            with self.subTest(titel=titel):
+                self.assertRegex(vorlage, re.compile(rf"^## {titel}$", re.M))
+
+    def test_richtung_klauseln_sind_lueckenlos_und_haben_eine_quelle(self):
+        richtung = self.text("docs/richtung.md")
+        klauseln = re.findall(r"^\*\*R(\d+)\. .+?\*\*\n(.*?)(?=^\*\*R\d+\. |\Z)", richtung, flags=re.S | re.M)
+        self.assertEqual([int(n) for n, _ in klauseln], list(range(1, len(klauseln) + 1)), "R1, R2, … ohne Lücke")
+        self.assertGreaterEqual(len(klauseln), 1)
+        for nummer, rumpf in klauseln:
+            with self.subTest(klausel=f"R{nummer}"):
+                quelle = re.search(r"^Quelle: (.+)$", rumpf, flags=re.M)
+                self.assertTrue(quelle, "Quelle: fehlt")
+                pfade = re.findall(r"`([^`]+)`", quelle.group(1))
+                self.assertTrue(pfade)
+                for pfad in pfade:
+                    self.assertTrue((PLUGIN / pfad).exists(), f"R{nummer} verweist auf {pfad}, den es nicht gibt")
+        self.assertIn("docs/richtung.md", self.claude)
 
 
 if __name__ == "__main__":

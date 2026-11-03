@@ -996,7 +996,7 @@ class TypordnerAbbildungen(Grundlage):
 
 
 # =====================================================================================================
-# Regressionstests zu den Angriffen aus plugins/okfw/.nachbau/angriffe/ (okfw 0.6.0).
+# Regressionstests zu den Angriffen aus .nachbau/angriffe/ (okfw 0.6.0).
 # ServeAngriffe: echter Server über okfw_serve.bauen auf 127.0.0.1 mit freiem Port (Stil von test_serve.ServeTest).
 # RollenUndApi: Funktionen aus rollen.py und recherche/scripts/api.py, direkt importiert (Stil von test_rollen).
 # SvgCssAngriffe: clean_svg und css_problem über Grundlage.py (Stil von SvgBereinigung und CssPruefung).

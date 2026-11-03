@@ -2,6 +2,37 @@
 
 Je Version steht hier nur das Ergebnis der Prüfungen. Protokolle und Berichte hängen als Anhang am Release, die aus der Zeit vor 0.6.0 gesammelt an 0.6.0.
 
+## 0.7.2 · 3.11.2026
+
+Rasterbilder als WebP, auf Wunsch von einem Bildmodell erzeugt, auch aus dem Dashboard; Klammerbelege als Kurzzitate nach APA 7; das Repo ist für Coding-Agenten vorbereitet. Hooks und Profile bleiben wie in 0.7.1.
+
+Geprüft: Nachbau mit echter Claude-Sitzung, alle Testsuiten, Diff seit 0.7.1 mit zwei Korrekturrunden, Screenshots im Container ohne Netz, die Prüfungen vor dem Export. Nicht geprüft im Release-Lauf: ein Aufruf an einen echten Bilddienst (der Dialog lief bis vor das Senden), echtes Safari und Telefon.
+
+### Rasterbilder als WebP, erzeugt mit der Rolle `bild`
+
+- **WebP neben SVG unter `abbildungen/`.** `abbildung <name> --file x.webp` prüft RIFF-Kopf, Länge und Bildblock, lehnt Animation, PNG und JPEG ab und entfernt EXIF, XMP und ICC, nur mit der Standardbibliothek. Das Dashboard bettet das bereinigte WebP als `data:image/webp` ein; jedes andere Bild bleibt Text. Ein Name gilt für genau eine Datei. R11 in `docs/richtung.md` nennt WebP jetzt mit.
+- **Befehl `bild`.** Erzeugt über `POST /images/generations` eines OpenAI-kompatiblen Anbieters ein WebP (`output_format` `webp`, rund 100 KB statt 3 MB als PNG). Wünsche in Worten (`--wunsch "breit, Entwurf, ohne Menschen, drei Varianten"`) werden zu Format, Tempo, Negativ-Prompt mit Guidance 4 (dann immer Tempo fein: Guidance mit verkürzten Schritten zerstörte im Test das Bild), Varianten mit Seed, Seed+1 …; krumme Formate werden auf Vielfache von 16 gerundet. Vor dem Senden: Erklärungen, Hinweise zum Prompt und „Was gesendet wird“ ohne Key, mit `--trocken` nur das. Gesendet werden nur zehn geprüfte Felder. Eigene Stile in `[bild.stile]`.
+- **Rolle `bild` in `rollen.py`:** nur Harness `direkt` mit OpenAI-Form, ab Werk ohne Modell. `rollen.py modelle <anbieter> --bild` und „Modelle laden“ in den Einstellungen zeigen nur Modelle mit `modality: image`, wo der Anbieter das Feld nennt.
+- **Nachweis und Lint.** Das Ereignis eines erzeugten Bildes trägt die ganze Anfrage mit Seed, Modell, Anbieter und Dauer, nie den Key. `figure_caption` verlangt bei erzeugten Bildern keine Fußnote; `figure_generated` verlangt weiter „KI“ oder „generiert“ in der Unterschrift.
+- **Dialog „Bild erzeugen“ in `serve`.** Worte in Schalter übernehmen, jede Einstellung änderbar, Erklärungen und „Was gesendet wird“ vor dem Senden (`/api/bild/vorschau`), Varianten als Auftrag im Hintergrund nebeneinander, Annehmen legt nur die gewählte ab und fügt sie mit KI-Unterschrift ein. Dafür `rollen.py bild` und `abbildung --anfrage`.
+- Nicht enthalten: Bild-zu-Bild (`/images/edits`).
+
+### Klammerbelege als Kurzzitate
+
+- **Klammerbelege sind Kurzzitate nach APA 7.** Bisher stand bei Gesetzen und Quellen ohne Autor der ganze Titel im Text, bei Organisationen der volle Name, etwa
+  „(Einkommensteuergesetz (EStG), § 33b Pauschbeträge für Menschen mit Behinderungen, Hinterbliebene und pflegende Personen, 2009)“. Jetzt steht dort „(§ 33b EStG, 2009)“,
+  „(BIH, 2026a)“ oder „(Verordnung (EU) 2024/1689, 2024)“. `csl_item` setzt dafür `title-short`, wenn der `csl`-Block keinen hat; damit trennt citeproc gleiche Kurztitel mit
+  a, b. Das Literaturverzeichnis bleibt vollständig.
+
+### Für Coding-Agenten und Beitragende
+
+- **`.claude/CLAUDE.md`, die Anleitung für Coding-Agenten.** Claude Code lädt sie als Projektanleitung; an der Wurzel meldete `claude plugin validate --strict`, dass ein Plugin sie dort nicht lädt. Sie nennt Zweck, Zweige (Feature-Zweige von `main`, PRs gegen `main`, Merge durch die Person oder auf ihre Ansage), den Prüfbefehl, wo Code, Skills, Hooks, Tests und Doku liegen, was ein Agent nie tut, und die Commit-Zeilen für beteiligte Modelle.
+- **`docs/richtung.md` mit nummerierten Klauseln R1 bis R14:** was okfw ist und was nicht, je Klausel mit der Stelle, an der es im Repo schon festgelegt ist.
+- **`.github/pull_request_template.md`:** Plan, Änderungen, Abweichungen vom Plan, Prüfergebnis, beteiligte Modelle.
+- **`tests/pruefen.sh` ist der einzige Prüfeinstieg.** Er führt aus, was die CI bisher in zwei Schritten ausführte, läuft beide Schritte immer zu Ende und endet bei jedem Fehler und ohne `uv` mit Exit ≠ 0. `.github/workflows/tests.yml` ruft nur noch ihn auf.
+- **`tests/test_abdeckung.py` prüft die Anleitung:** Jeder Pfad und Befehl, den `.claude/CLAUDE.md` nennt, existiert; der Prüfeinstieg ist ausführbar und scheitert ohne `uv`; die CI ruft nur ihn auf; die Klauseln in `docs/richtung.md` sind lückenlos nummeriert und verweisen auf bestehende Dateien; die PR-Vorlage hat ihre Abschnitte.
+- **Beiträge in `docs/entwicklung.md`:** Pull Requests gehen gegen `main` dieses Repos; sie werden ins Arbeitsrepo übernommen und kommen mit der nächsten Version zurück, mit Autor und Nennung im Release.
+
 ## 0.7.1 · 2.11.2026
 
 Parlamentsmaterial in `recherche`: die DIP-API des Bundestags, nur lesend. Kern, Hooks und Profile bleiben wie in 0.7.0, im Kern ändert sich nur die Versionsnummer.

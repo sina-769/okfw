@@ -312,7 +312,7 @@ class WikiLint:
         for ref in self.figure_refs(p.body):
             name, caption = ref["name"], ref["caption"]
             try:
-                self.figure_svg(name)
+                self.figure_check(name, ref["ext"])
             except FigureError as exc:
                 add("figure_missing", p.path, f"Abbildung {name}: {exc}")
             modell = self._abbildung_modell.get(name)
@@ -320,6 +320,8 @@ class WikiLint:
                 add("figure_generated", p.path, f"Abbildung {name} stammt laut Ereignisprotokoll von {modell}; die Zeile darunter sagt das nicht. "
                     f"Ergänzen, etwa „Mit KI erzeugt ({modell})“")
             labels = FOOTNOTE_REF_RE.findall(caption)
+            if modell and FIGURE_CAPTION_RE.match(caption) and not labels:
+                continue   # erzeugt, nicht nach einer Quelle: keine Fußnote nötig
             if not (FIGURE_CAPTION_RE.match(caption) and labels):
                 add("figure_caption", p.path, f"Abbildung {name}: direkt darunter fehlt eine Zeile `*Abb.: …*` mit "
                     "Fußnote, etwa `*Abb.: Was sie zeigt. Eigene Darstellung nach Müller[^mueller].*`")

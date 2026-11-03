@@ -161,7 +161,7 @@ Karten verschwinden nicht von Hand: `deprecate <seite> --by … [--nachfolger SE
 `status` · `lint [--strict] [--summary] [--json]` · `rebuild [--check]` · `new <typ> <slug> …` ·
 `capture <slug> --url --file` · `hash <pfad>` · `verify <seite>… --by … [--force]` · `deprecate <seite> --by …` · `delete <seite>` · `restore [<eintrag>]` · `event <ereignisart> <seite> [detail]` ·
 `body <seite> <datei|->` · `sources <seite> --add a,b | --remove c` · `init [--profile …]` · `gitattributes` · `fundweg <seite> --art …` · `rechte [<seite>] [--aktion …]` ·
-`lizenz <seite> --fetch | --name …` · `lizenz --missing --fetch [--dry-run]` · `abbildung <name> --file x.svg` · `dashboard [--out PFAD] [--oeffentlich] [--open]` · `pfad neu|pruefen|uebernehmen|export` · `serve [--port N] [--no-open]`. Optionen und
+`lizenz <seite> --fetch | --name …` · `lizenz --missing --fetch [--dry-run]` · `abbildung <name> --file x.svg|x.webp` · `bild <name> --prompt …` · `dashboard [--out PFAD] [--oeffentlich] [--open]` · `pfad neu|pruefen|uebernehmen|export` · `serve [--port N] [--no-open]`. Optionen und
 `wiki.toml`-Schlüssel: [docs/konfiguration.md](docs/konfiguration.md).
 
 `serve` startet dasselbe Dashboard lokal mit Bearbeiten (Inhalt, Eigenschaften, Pfade, Freigabe, neue Karten, Modellvorschlag, Einstellungen), nur auf diesem Rechner, unter einem zufälligen Pfad und mit Token; Karten, Freigaben und Abbildungen schreibt allein der Kern, Akteur ist `human:<kennung>`; Einstellungen und Design schreibt der Server selbst. Die Dashboard-Datei zum Weitergeben bleibt eine Leseansicht ohne Bearbeitungscode. Einzelheiten: [docs/konfiguration.md](docs/konfiguration.md#bearbeiten-im-dashboard).
@@ -212,7 +212,8 @@ verweisen; Lint meldet das als `visibility_leak`. Nur die öffentliche Datei wei
 
 ## Schaubilder
 
-Bilder im Wiki sind SVG-Dateien unter `<bundle>/abbildungen/<name>.svg`; sonst gibt es keine Bilder und kein Mermaid.
+Schaubilder sind SVG-Dateien unter `<bundle>/abbildungen/<name>.svg`, Rasterbilder WebP-Dateien daneben (`<name>.webp`);
+sonst gibt es keine Bilder und kein Mermaid.
 `abbildung <name> --file x.svg` prüft die Datei, entfernt Skripte, Ereignis-Attribute, fremde Adressen und alles außerhalb
 einer Liste erlaubter Elemente und legt sie ab (über 200 KB, nicht UTF-8, ein anderer als der Standard-DOCTYPE oder ohne `viewBox` und umrechenbare `width`/`height`: Exit 2; einfache `<style>`-Regeln werden in `style`-Attribute übernommen). Eingebunden wird sie so, mit der Unterschrift direkt darunter:
 
@@ -226,9 +227,18 @@ Die Unterschrift beginnt mit `*Abb.` und trägt eine Fußnote (Lint `figure_capt
 `figure_rights` aus, solange das Recht nicht erlaubt ist. Das Dashboard bettet die bereinigte Abbildung inline ein; eine
 fehlende oder abgelehnte Datei meldet `figure_missing` (Fehler).
 
+**Rasterbilder.** `abbildung <name> --file x.webp` legt ein WebP ab (höchstens 1 MB; EXIF, XMP und ICC entfallen; PNG und
+JPEG vorher umwandeln). `bild <name> --prompt "…" [--wunsch "breit, Entwurf, ohne Menschen"]` erzeugt eins mit der Rolle
+`bild`: erst mit `--trocken` zeigen, was gesendet würde, und die Person die Einstellungen bestätigen lassen; ein Prompt beschreibt
+Motiv, Anordnung, Material, Licht und Stil, ohne Personenbezogenes. Weitere Schalter: `--format`, `--tempo`, `--ohne`,
+`--seed`, `--varianten`, `--text`, `--stil` (eigene in `[bild.stile]`). Unter das Bild gehört die Zeile, die der Befehl
+vorschlägt (`*Abb.: … KI-generiert mit …*`, Lint `figure_generated`); erzeugte Bilder belegen nichts. In `serve` macht
+das der Dialog „Bild erzeugen“ im Editor: Worte zu Schaltern, Vorschau der Anfrage, Varianten nebeneinander. Einzelheiten:
+[docs/konfiguration.md](docs/konfiguration.md#bilder).
+
 ## Modellrollen
 
-Wer Lesen, Gegenprüfen, Bearbeiten per Prompt und den Webabruf erledigt, legt `rollen.py` fest: je Rolle Harness
+Wer Lesen, Gegenprüfen, Bearbeiten per Prompt, den Webabruf und Bilder (Rolle `bild`) erledigt, legt `rollen.py` fest: je Rolle Harness
 (`sitzung`, `claude`, `opencode`, `direkt`, `container`), Anbieter und Modell, in Schichten von Werk bis zur `wiki.toml`. In der
 `wiki.toml` stehen `[rollen] daten` (Datenklasse des Wikis: `oeffentlich`, `intern`, `personenbezogen`) und `sperre`
 (Anbieter, an die nichts geht). Ist ein Anbieter für die Datenklasse nicht freigegeben, ist die Rolle gesperrt; Inhalte

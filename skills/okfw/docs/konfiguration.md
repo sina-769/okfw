@@ -576,7 +576,8 @@ Graph: Kanten sind Links im Text **und** `sources[].resource`, die auf Seiten im
 
 ## Schaubilder
 
-Schaubilder sind SVG-Dateien unter `<bundle>/abbildungen/<name>.svg` (Name kebab-case). In einer Seite stehen sie als Bild
+Schaubilder sind SVG-Dateien unter `<bundle>/abbildungen/<name>.svg` (Name kebab-case), Rasterbilder WebP-Dateien unter
+`<bundle>/abbildungen/<name>.webp` (siehe [Bilder](#bilder)); ein Name gilt für genau eine Datei. In einer Seite stehen sie als Bild
 mit einer Bildunterschrift direkt darunter; die Unterschrift beginnt mit `*Abb.` und trägt eine Fußnote, die belegt, woher das
 Bild kommt:
 
@@ -628,7 +629,8 @@ vorhandene ersetzen (mit den Seiten, die sie schon zeigen) oder unter einem frei
 
 **Dashboard.** Die Leseansicht bettet das bereinigte SVG inline ein, als `<figure class="abbildung">` mit `<figcaption>`
 (die Zeile `*Abb. …*` samt APA-Beleg); die Datei bleibt ohne Netz. Fehlt die Datei, wird sie abgelehnt oder ist sie ein Symlink aus dem Bundle hinaus, steht statt des Bildes
-„Abbildung nicht eingebunden: <name>“. Jedes andere Bild (`http`, `png`, ein anderer Ordner) wird nie geladen, es erscheint als
+„Abbildung nicht eingebunden: <name>“. Ein WebP aus `abbildungen/` bettet sie nach der Bereinigung als `data:image/webp` ein.
+Jedes andere Bild (`http`, `png`, `data:` im Text, ein anderer Ordner) wird nie geladen, es erscheint als
 Text „Bild nicht eingebunden: …“. Die öffentliche Ausgabe (`dashboard --oeffentlich`) bettet nur Abbildungen ein, die eine
 öffentliche Seite nutzt; die einer internen Seite fehlen, ihre Belege auf verborgene Quellen entfallen wie sonst.
 
@@ -637,10 +639,73 @@ abbildung`): Steht in der Unterschrift „übernommen“, prüft Lint `figure_ri
 Eine eigene Darstellung nach einer Quelle („Eigene Darstellung nach Müller“) ist keine Übernahme; wer nachzeichnet,
 prüft „Bearbeiten, übersetzen, nachzeichnen“ selbst.
 
+## Bilder
+
+Rasterbilder (Fotos, Illustrationen) sind WebP-Dateien unter `<bundle>/abbildungen/<name>.webp`, eingebunden wie ein
+Schaubild. WebP, weil es klein ist: Ein Bild 1536x864 hat rund 100 KB, als PNG 3 MB; SVG bleibt für Schaubilder. PNG und
+JPEG nimmt okfw nicht an, `abbildung` nennt den Weg (`cwebp -q 80 bild.png -o bild.webp`).
+
+`abbildung <name> --file x.webp` prüft und legt ein vorhandenes WebP ab (über 1 MB oder über 4096 Pixel je Seite: Exit 2).
+Mit `--rolle` nimmt `--anfrage DATEI` das JSON der Anfrage, die das Bild erzeugt hat, ins Ereignis auf (so legt `serve` ein
+angenommenes Bild ab).
+**Bereinigung** (nur Standardbibliothek, `clean_webp`), beim Ablegen und bei jedem Bau: RIFF-Kopf und Länge müssen stimmen,
+genau ein Bildblock (`VP8` oder `VP8L`) mit gültigem Kopf; animierte WebP werden abgelehnt. Übernommen werden nur die
+Blöcke, die zeichnen; EXIF, XMP, ICC-Profil und Unbekanntes entfallen (gemeldet auf stderr). Die Pixel dekodiert okfw
+nicht, das tut der Browser.
+
+`bild <name> --prompt TEXT` erzeugt ein Bild mit dem Modell der Rolle `bild` und legt es als WebP ab. Den Abruf macht
+`rollen.py` direkt über `POST /images/generations` eines OpenAI-kompatiblen Anbieters. Vor dem Senden zeigt der Befehl
+Modell, Anbieter, Datenklasse des Wikis, Format, Seed, Tempo, ob ein Negativ-Prompt wirkt, die erwartete Dauer,
+Hinweise zum Prompt und „Was gesendet wird“ als JSON ohne Key; `--trocken` hört dort auf.
+
+| Option | Wirkung |
+|---|---|
+| `--wunsch WORTE` | Einstellungen in Worten, etwa „breit, Entwurf, ohne Menschen, drei Varianten“; ausdrückliche Optionen gehen vor. Häufiges nach „ohne“ wird englisch (Menschen → people), Unbekanntes bleibt mit Hinweis stehen |
+| `--format F` | `quadrat` 1024x1024 (Vorgabe), `quer` 1536x864, `hoch` 864x1536, `gross` 2048x1152, `4:3` 1280x960, `3:2` 1536x1024 (die beiden letzten noch nicht am Modell ausprobiert) oder `BREITExHÖHE`, auf Vielfache von 16 gerundet (256 bis 2048) |
+| `--tempo entwurf\|fein` | `entwurf`: 8 Schritte (`num_inference_steps`), Sekunden; `fein` (Vorgabe): ohne Angabe, rund 24 s bei 1536x864 |
+| `--ohne X` | was nicht ins Bild soll, mehrfach; setzt `negative_prompt` und `guidance_scale` 4, denn ohne Guidance wirkt er kaum. Guidance mit verkürzten Schritten ergab leere oder verrauschte Bilder, darum gilt dann immer Tempo `fein` |
+| `--seed N` | gleiche Zahl und gleiche Einstellungen: bitgleiches Bild; anderes Format oder Tempo: anderes Bild. 0 bis 2147483644, ohne Angabe zufällig |
+| `--varianten N` | 1 bis 4 Bilder `<name>-1` … mit Seed, Seed+1 …, jedes einzeln wiederholbar (statt `n`) |
+| `--text` / `--no-text` | Schrift im Bild; Vorgabe aus: okfw hängt „no text, no letters, no logos“ an, weil das Modell sonst Wörter erfindet |
+| `--stil S` | eigener Stil aus `[bild.stile]` oder ein eingebauter: `foto`, `tilt-shift`, `linolschnitt`, `risografie`, `stickerei`, `oelgemaelde`, `film-noir`, `isometrisch`, `pop-art`, `flach` |
+| `--titel T` | Titel für die Einbindung und die vorgeschlagene Bildunterschrift |
+| `--ersetzen` | ein vorhandenes WebP gleichen Namens überschreiben |
+| `--trocken` | nur zeigen, was gesendet würde |
+
+Aus `--wunsch` liest okfw: „quadratisch“ → `quadrat`; „breit“, „Folie“, „Querformat“, „16:9“ → `quer`; „hochkant“,
+„Plakat“, „Handy“, „9:16“ → `hoch`; „groß“, „Druck“ → `gross`; „Entwurf“, „Skizze“, „schnell“ → `entwurf`; „fein“,
+„final“ → `fein`; „ohne X“, „keine X“ → `--ohne X`; „mit Text“ / „ohne Text“; „zwei|drei|vier Varianten“; „in meinem
+Design“ → Stil `design`; Namen der eingebauten Stile. Gesendet werden nur `model`, `prompt`, `size`, `seed`, `n`,
+`response_format`, `output_format` (`webp`), `num_inference_steps`, `guidance_scale` und `negative_prompt`: Ein Backend wie
+vLLM-Omni nimmt unbekannte Felder stumm an, ein Tippfehler fiele nicht auf.
+
+**Hinweise zum Prompt** (aus Versuchen mit 84 Bildern): Unter zwölf Wörtern fragt okfw nach Motiv, Anordnung, Material,
+Licht und Stil. Farbnamen, die Gegenstände sind („lemon-yellow“ ergab Zitronen), sollen einem neutralen Namen mit Hex-Code
+weichen. Ab vier Elementen stimmt die Zahl oft nicht. Text im Bild gelingt bei kurzen Wörtern in Anführungszeichen; ab drei
+Wörtern kommen echt aussehende Fehler, der Satz gehört dann in die Unterschrift. Nicht in den Prompt gehört, was die
+Datenklasse des Anbieters nicht erlaubt: keine personenbezogenen Daten, keine realen Personen.
+
+**Eigene Stile** stehen in der `wiki.toml`; `{motiv}` steht für den Prompt, ohne `{motiv}` wird die Vorlage angehängt;
+höchstens 600 Zeichen je Vorlage:
+
+```toml
+[bild.stile]
+design = "Minimal flat editorial illustration, warm alabaster off-white background (#F4F3ED), charcoal line work (#1A1A1A), one bright yellow accent color (#FCE53A), generous empty space, calm, no gradients, no text. {motiv}"
+```
+
+**Nachweis.** Jedes Bild schreibt ein Ereignis `create abbildungen/<name>` mit `modelle` (Rolle `bild`) und `bild`:
+Anbieter, Endpunkt, Modell, die ganze Anfrage mit Seed, Dauer und die Angaben der Antwort ohne Bilddaten (höchstens zwölf
+kurze Werte, ein gespiegelter Key geschwärzt). Der Key steht nie darin. Die vorgeschlagene Unterschrift lautet `*Abb.: <Titel>. KI-generiert mit <Modell> (<Anbieter>), <Datum>.*`;
+sie erfüllt `figure_generated`. Eine Fußnote verlangt `figure_caption` bei erzeugten Bildern nicht, denn sie stammen aus
+keiner Quelle. Erzeugte Bilder sind keine Belege und tragen keine Sachaussage, die nicht im Wiki belegt ist. Ob ein
+Anbieter erlaubt, seine Bilder öffentlich zu zeigen (`dashboard --oeffentlich`), steht in seinen Bedingungen; okfw prüft
+das nicht.
+
 ## Modellrollen
 
-`rollen.py` (neben `okfw.py`, nur Standardbibliothek) beantwortet, wer welche Arbeit im Wiki erledigt. Vier Rollen:
-`lesen`, `gegenpruefen`, `bearbeiten` (per Prompt) und `webabruf`. Jede zeigt auf einen **Harness**, einen **Anbieter** und
+`rollen.py` (neben `okfw.py`, nur Standardbibliothek) beantwortet, wer welche Arbeit im Wiki erledigt. Fünf Rollen:
+`lesen`, `gegenpruefen`, `bearbeiten` (per Prompt), `webabruf` und `bild` (Bilder erzeugen, nur Harness `direkt` mit einem
+OpenAI-kompatiblen Anbieter; ab Werk ohne Modell, also aus). Jede zeigt auf einen **Harness**, einen **Anbieter** und
 ein **Modell**: der Harness ist der Weg, der Anbieter die Abrechnung, das Modell das Gehirn.
 
 | Harness | Weg |
@@ -659,10 +724,11 @@ Seine Kennung besteht nur aus Buchstaben, Ziffern, Bindestrich und Unterstrich; 
 ```bash
 uv run --no-config --quiet ~/.claude/skills/okfw/rollen.py [--wiki PFAD] status [--json]   # Harnesses, Anbieter, Rollen, ohne Modellaufruf
 uv run --no-config --quiet ~/.claude/skills/okfw/rollen.py zeige lesen [--json]   # aufgelöste Rolle mit Herkunft je Feld und Sperre
-uv run --no-config --quiet ~/.claude/skills/okfw/rollen.py modelle <anbieter> [--json]   # Modellliste des Anbieters (Vorschlag, kein Zwang)
+uv run --no-config --quiet ~/.claude/skills/okfw/rollen.py modelle <anbieter> [--bild] [--json]   # Modellliste des Anbieters (Vorschlag, kein Zwang); --bild: nur Bildmodelle (modality image, wo der Anbieter das Feld nennt)
 uv run --no-config --quiet ~/.claude/skills/okfw/rollen.py setze lesen --harness direkt --anbieter fern --modell m
 uv run --no-config --quiet ~/.claude/skills/okfw/rollen.py anbieter fern --name … --openai URL [--anthropic URL] [--schluessel NAME | --schluessel-env NAME] [--hinweis …] [--daten oeffentlich,intern]   # oder --entfernen
 uv run --no-config --quiet ~/.claude/skills/okfw/rollen.py auftrag --rolle lesen --datei auftrag.md [--anhang datei]… [--trocken] [--json] [--ohne-wiki]
+uv run --no-config --quiet ~/.claude/skills/okfw/rollen.py --wiki wiki.toml bild --nutzlast anfrage.json --aus bild.webp [--json]   # ein Bild über die Rolle bild; nutzt serve
 ```
 
 `--wiki PFAD` (vor dem Befehl) nimmt eine `wiki.toml` statt der, die `rollen.py` aufwärts ab dem Arbeitsordner findet; eine
@@ -1027,7 +1093,12 @@ qm = "Qualitätsmanagement"
 - **Belege nach APA 7:** In der Leseansicht wird jede Fußnote `[^id]`, deren `id` auf eine Quellenkarte
   zeigt, zum APA-Klammerbeleg „(Sarkar & Drosos, 2025)“ vor dem Satzzeichen; mehrere hintereinander
   werden zu „(A, 2020; B, 2021)“. Fundstellen aus dem Fußnotentext (S., Art., §, Abs., Kap., Tab. …)
-  wandern in den Beleg („…, 2016, Art. 9“), der übrige Fußnotentext in den Tooltip. Am Ende steht
+  wandern in den Beleg („…, 2016, Art. 9“), der übrige Fußnotentext in den Tooltip. Der Beleg ist
+  immer das Kurzzitat: Organisationen mit Abkürzung stehen als „(BIH, 2026)“, Gesetze und Quellen
+  ohne Autor mit `title-short` aus dem `csl`-Block oder, wenn er fehlt, mit einem gebildeten
+  Kurztitel: Abkürzung samt Paragraf („§ 33b EStG“), EU-Nummer („Verordnung (EU) 2024/1689“), sonst
+  die ersten vier Wörter bis zum ersten Doppelpunkt, Gedankenstrich, Komma oder zur ersten Klammer.
+  Die volle Form steht im Literaturverzeichnis und im Tooltip. Am Ende steht
   genau ein Literaturverzeichnis in APA 7 (alphabetisch, hängender Einzug) mit dem `access` jeder
   Quelle und einem Sprung zur Quellenkarte; Fußnotenblock und eine zweite Quellenliste entfallen.
   Quellenkarten zeigen oben Kurzbeleg und Titel; eine Überschrift im Stil „Autor (Jahr): Titel“ und ein
@@ -1152,6 +1223,7 @@ Server selbst, ohne Ereignis.
 | Freigeben, Alle freigeben | wie `verify --by human:<kennung> --status stable`. Fehlt zum jetzigen Inhalt die Gegenprüfung, fragt das Dashboard je Seite nach; erst „Trotzdem freigeben“ gibt frei wie `--force`. Die Seite gilt dann nicht als gegengeprüft: Das Ereignis vermerkt „freigegeben ohne Gegenprüfung“, die Karte trägt die Marke „ohne Gegenprüfung“, der Lint meldet `human_without_check`. Abgelöste Karten lassen sich nicht freigeben |
 | Neue Karte | wie `new`; Pflichtfelder und Befunde zeigt der Lint nach dem Anlegen |
 | Abbildung einfügen | Befehl `abbildung` (Prüfung und Bereinigung des SVG im Kern); auch als Entwurf eines Modells aus einer Beschreibung |
+| Bild erzeugen | Auftrag im Hintergrund, Rolle `bild` über `rollen.py bild`; „Annehmen“ legt eine Variante über `abbildung --rolle bild --anfrage …` ab |
 | Vorschlag holen | Auftrag im Hintergrund, Rolle „Bearbeiten per Prompt“ über `rollen.py auftrag`; geschrieben wird erst mit „Annehmen“ oder „Speichern“ |
 
 Nach jedem Speichern läuft `rebuild`; die Antwort enthält die Lint-Befunde zur Seite. Jede Speicheranfrage trägt den
@@ -1175,6 +1247,17 @@ Textfeld, „Speichern“ ist dann ein eigener Schritt. Das Ereignis nennt Rolle
 Beschreibung, weder die Seite noch eine Quelle. Das SVG des Modells durchläuft dieselbe Bereinigung wie ein hochgeladenes. Abgelegt wird es erst mit „Annehmen“, ein vorhandenes Bild ersetzt
 dieser Weg nie. Das Ereignis nennt das Modell, und die Bildunterschrift erhält „Mit KI erzeugt (Modell)“, auch in der Datei zum Weitergeben. Das Bild ist eine Illustration, kein Beleg. Ob das
 eine gesetzliche Kennzeichnungspflicht erfüllt, ist nicht geprüft.
+
+**Bild erzeugen.** Der Knopf neben „Abbildung einfügen“ öffnet einen eigenen Dialog: Name, Titel, „Was soll zu sehen sein?“
+und „Wunsch in Worten“. „In Schalter übernehmen“ (oder Eingabe) setzt aus den Worten Format, Tempo, Varianten, Stil, „Ohne“
+und Schrift; jeder Schalter bleibt änderbar, Ausdrückliches gilt. Darunter stehen bei jeder Änderung Modell, Anbieter,
+Datenklasse, die Erklärungen und Hinweise zum Prompt wie beim Befehl [`bild`](#bilder) und aufklappbar „Was gesendet wird“
+ohne Schlüssel; der Server rechnet das ohne zu senden (`POST /api/bild/vorschau`). Der Seed steht im Feld, damit gesendet
+wird, was zu sehen war; „Neuer Seed“ würfelt neu. Ist die Rolle nicht bereit oder ein Name vergeben, bleibt „Senden“ aus.
+Der Auftrag holt je Variante ein Bild über `rollen.py bild` und zeigt die Bilder nebeneinander, frisch bereinigt als
+`data:`. Abgelegt wird erst die angenommene Variante; die anderen verwirft man. Das Ereignis trägt Rolle `bild`, Modell und
+die Anfrage mit Seed, eingefügt wird das Bild mit der Unterschrift „KI-generiert mit …“. Die Auftragsdatei enthält die Bilder
+bis zur Entscheidung, nie den Schlüssel.
 
 **Aufträge.** Ein Modellaufruf läuft im Hintergrund des Servers: Die Seite bleibt bedienbar, der Auftrag übersteht ein Neuladen, „Auftrag abbrechen“ beendet den
 Prozess samt Kindern, und je Rolle läuft einer zugleich. Offene Aufträge stehen unter „Aufträge“ in der Kopfzeile. Je Auftrag liegt eine JSON-Datei unter

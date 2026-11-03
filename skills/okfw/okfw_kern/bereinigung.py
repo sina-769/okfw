@@ -8,6 +8,8 @@ from .basis import FigureError
 
 
 FIGURE_MAX_BYTES = 200 * 1024
+RASTER_MAX_BYTES = 1024 * 1024   # WebP; ein Bild 1536x864 hat rund 100 KB, das Dashboard bettet es als data: ein
+RASTER_MAX_SIDE = 4096
 FIGURE_MAX_ELEMENTS = 5000
 FIGURE_MAX_EXPANSION = 20000   # Elemente nach dem Auflösen aller <use>: verschachteltes <use> wächst sonst exponentiell
 SVG_NS = "http://www.w3.org/2000/svg"
@@ -396,6 +398,54 @@ def clean_svg(source, prefix: str = "", label: str = "") -> tuple[str, list[str]
     if inlined and len(result.encode("utf-8")) > FIGURE_MAX_BYTES:   # die abgelegte Datei muss die Grenze beim Bau wieder bestehen
         raise FigureError(f"mit den übernommenen style-Regeln größer als {FIGURE_MAX_BYTES // 1024} KB")
     return result, sorted(removed)
+
+
+def clean_webp(data: bytes) -> tuple[bytes, tuple[int, int], list[str]]:
+    """WebP (RIFF) prüfen und neu zusammensetzen: nur die Blöcke, die das Bild zeichnen (VP8, VP8L, ALPH, VP8X).
+    EXIF, XMP, ICC-Profil und Unbekanntes entfallen; Animation wird abgelehnt. Ohne Bildbibliothek: Pixel werden nicht
+    dekodiert, der Browser zeichnet sie. Ergebnis: (Datei, (Breite, Höhe), entfernte Blöcke)."""
+    if len(data) > RASTER_MAX_BYTES:
+        raise FigureError(f"größer als {RASTER_MAX_BYTES // 1024} KB")
+    if len(data) < 20 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
+        raise FigureError("kein WebP (RIFF/WEBP fehlt)")
+    if int.from_bytes(data[4:8], "little") + 8 != len(data):
+        raise FigureError("WebP abgeschnitten oder mit Anhang (RIFF-Länge stimmt nicht)")
+    chunks, i = [], 12
+    while i < len(data):
+        if i + 8 > len(data):
+            raise FigureError("WebP endet mitten in einem Blockkopf")
+        tag, size = data[i:i + 4], int.from_bytes(data[i + 4:i + 8], "little")
+        end = i + 8 + size
+        if end > len(data):
+            raise FigureError(f"WebP-Block {tag!r} länger als die Datei")
+        chunks.append((tag, data[i + 8:end]))
+        i = end + (size & 1)
+    tags = [t for t, _ in chunks]
+    if b"ANIM" in tags or b"ANMF" in tags:
+        raise FigureError("animiertes WebP wird nicht eingebettet")
+    bild = [(t, d) for t, d in chunks if t in (b"VP8 ", b"VP8L")]
+    if len(bild) != 1:
+        raise FigureError("WebP ohne genau einen Bildblock (VP8 oder VP8L)")
+    tag, frame = bild[0]
+    if tag == b"VP8 ":
+        if len(frame) < 10 or frame[3:6] != b"\x9d\x01\x2a":
+            raise FigureError("VP8-Block ohne gültigen Kopf")
+        size = (int.from_bytes(frame[6:8], "little") & 0x3FFF, int.from_bytes(frame[8:10], "little") & 0x3FFF)
+    else:
+        if len(frame) < 5 or frame[0] != 0x2F:
+            raise FigureError("VP8L-Block ohne gültigen Kopf")
+        bits = int.from_bytes(frame[1:5], "little")
+        size = ((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1)
+    if not all(size) or max(size) > RASTER_MAX_SIDE:
+        raise FigureError(f"Bildmaß {size[0]}x{size[1]} außerhalb 1–{RASTER_MAX_SIDE} Pixel")
+    alpha = tag == b"VP8 " and b"ALPH" in tags   # VP8L trägt Transparenz selbst
+    keep = [(t, d) for t, d in chunks if t == tag or alpha and t == b"ALPH"]
+    removed = sorted({t.decode("latin-1").strip() for t, _ in chunks if (t, _) not in keep and t != b"VP8X"})
+    if alpha:   # Transparenz zu VP8 braucht den erweiterten Kopf; ohne Metadaten nur mit dem Alpha-Bit
+        w, h = size
+        keep.insert(0, (b"VP8X", bytes([0x10, 0, 0, 0]) + (w - 1).to_bytes(3, "little") + (h - 1).to_bytes(3, "little")))
+    body = b"".join(t + len(d).to_bytes(4, "little") + d + (b"\0" if len(d) & 1 else b"") for t, d in keep)
+    return b"RIFF" + (len(body) + 4).to_bytes(4, "little") + b"WEBP" + body, size, removed
 
 
 def css_plain(css: str) -> str:

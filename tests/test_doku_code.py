@@ -89,6 +89,50 @@ class ApaAlsStandard(WikiTest):
         self.assertIn("Muster, M. (2024)", out)
 
 
+class KurzzitatNachApa(WikiTest):
+    """Im Text steht der Kurzbeleg: Abkürzung, Rechtsakt-Nummer oder die ersten Wörter, nie der ganze Titel."""
+
+    TITEL = {
+        "Gesetz zum kontrollierten Umgang mit Cannabis und zur Änderung weiterer Vorschriften (CanG)": "CanG",
+        "Einkommensteuergesetz (EStG), § 33b Pauschbeträge für Menschen mit Behinderungen": "§ 33b EStG",
+        "Verordnung über den Betrieb von Apotheken (Apothekenbetriebsordnung – ApBetrO), §§ 2a, 3, 17, 20":
+            "§§ 2a, 3, 17, 20 ApBetrO",
+        "Verordnung (EU) 2017/745 über Medizinprodukte (Medizinprodukteverordnung, MDR), konsolidierte Fassung": "MDR",
+        "Verordnung (EU) 2024/1689 zur Festlegung harmonisierter Vorschriften für künstliche Intelligenz":
+            "Verordnung (EU) 2024/1689",
+        "§ 20 Apothekenbetriebsordnung: Information und Beratung": "§ 20 Apothekenbetriebsordnung",
+        "Registernummern in PubMed und die Brücke zu CTIS (Probe)": "Registernummern in PubMed",
+        "AIB 2025-1 / MDCG 2025-6: Interplay between the MDR & IVDR and the Artificial Intelligence Act (AIA)":
+            "AIB 2025-1 / MDCG 2025-6",
+        "Kurzer Titel": "",
+    }
+    NAMEN = {
+        "Bundesarbeitsgemeinschaft der Inklusionsämter und Hilfen der Sozialen Entschädigung (BIH)": "BIH",
+        "ABDA – Bundesvereinigung Deutscher Apothekerverbände": "ABDA",
+        "Institute of Medicine (US) Committee on Quality of Health Care in America":
+            "Institute of Medicine (US) Committee on Quality of Health Care in America",
+        "European Medicines Agency": "European Medicines Agency",
+    }
+
+    def test_kurztitel(self):
+        out = self.py(f"result = {{t: okfw.kurztitel(t) for t in {list(self.TITEL)!r}}}")
+        self.assertEqual(out, self.TITEL)
+
+    def test_kurzname(self):
+        out = self.py(f"result = {{n: okfw.kurzname(n) for n in {list(self.NAMEN)!r}}}")
+        self.assertEqual(out, self.NAMEN)
+
+    @unittest.skipIf(shutil.which("pandoc") is None, "pandoc fehlt")
+    def test_klammerbeleg_kurz_literaturangabe_lang(self):
+        self.core("new", "source", "cang", "--title", "Gesetz zum kontrollierten Umgang mit Cannabis (CanG)",
+                  "--description", "D", "--access", "citation", "--set", "year=2024")
+        self.core("new", "source", "bih", "--title", "Fachlexikon", "--description", "D", "--access", "citation",
+                  "--set", "year=2026", "--set", "authors=Bundesarbeitsgemeinschaft der Inklusionsämter (BIH)")
+        out = self.py("result = {k: v['cite'] + ' | ' + v['entry'] for k, v in wiki.apa_catalog().items()}")
+        self.assertRegex(out["cang"], r"^<em>CanG</em>, 2024 \| .*Gesetz zum kontrollierten Umgang mit Cannabis")
+        self.assertRegex(out["bih"], r"^BIH, 2026 \| Bundesarbeitsgemeinschaft der Inklusionsämter \(BIH\)")
+
+
 class ZeilenAlsFundstelle(WikiTest):
     def test_z_landet_im_beleg(self):
         self.quelle("q1", extra=("--set", "date=2026-10-25"))

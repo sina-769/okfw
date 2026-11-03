@@ -211,13 +211,15 @@ class Wiki(WikiQuellen, WikiSicht, WikiIndexe, WikiLint, WikiPfad, WikiDashboard
         return sorted(events, key=lambda e: as_datetime(e.get("ts")) or undated)
 
     def append_event(self, kind: str, page: str, detail: str = "", by: str | None = None,
-                     modelle: list | None = None) -> dict:
+                     modelle: list | None = None, bild: dict | None = None) -> dict:
         if self.events_path.is_symlink() and not self.events_path.resolve().is_relative_to(self.root):
             raise WikiError(f"{self.events_path} ist ein Symlink aus dem Projekt heraus: kein Ereignis geschrieben")
         self.events_path.parent.mkdir(parents=True, exist_ok=True)
         event = {"ts": now_iso(), "kind": kind, "page": page, "by": by or self.actor, "detail": one_line(detail)}
         if modelle:   # zweite Ablage neben dem Frontmatter, das sich von Hand ändern lässt (Lint modell_herkunft_fehlt)
             event["modelle"] = [{k: v[k] for k in MODELL_KENNUNG if v.get(k)} for v in modelle]
+        if bild:   # erzeugtes Bild: Anfrage ohne Key, damit es sich mit gleichem Seed wiederholen lässt
+            event["bild"] = bild
         with self.events_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
         return event

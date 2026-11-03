@@ -67,10 +67,69 @@ def pubmed_notices(xml: bytes) -> list[dict]:
     return out
 
 
+_NICHT_ABK = {"EU", "EG", "EWG", "EC", "EEC", "US", "USA", "UK"}
+_PARAGRAF_RE = re.compile(r"§§?\s*\d+[a-z]?(?:\s*(?:,|–|-|bis|und)\s*\d+[a-z]?)*")
+_EU_AKT_RE = re.compile(r"(?:Durchführungs|Delegierte |Implementing |Delegated )?(?:Verordnung|Richtlinie|Beschluss|Regulation"
+                        r"|Directive|Decision)\s*\((?:EU|EG|EWG|EC|EEC)(?:, Euratom)?\)\s*(?:Nr\.\s*|No\.?\s*)?\d+/\d+")
+_FUELLWORT = {"von", "vom", "ohne", "der", "die", "das", "des", "den", "dem", "und", "oder", "zu", "zur", "zum", "für", "mit",
+              "über", "im", "in", "auf", "bei", "nach", "vor", "aus", "an", "am", "ein", "eine", "of", "the", "and", "for",
+              "to", "on", "a", "an", "with", "from", "by"}
+
+
+def _abkuerzung(text: str) -> str:
+    """'SGB IX', 'ApBetrO', 'BAG UB' – Abkürzung, wie sie in Klammern hinter Gesetzes- und Organisationsnamen steht; sonst leer."""
+    text = text.strip()
+    if not 2 <= len(text) <= 15 or text in _NICHT_ABK or sum(c.isupper() for c in text) < 2:
+        return ""
+    return text if re.fullmatch(r"[A-ZÄÖÜ][\wÄÖÜäöüß.\-/]*(?: [A-ZÄÖÜ0-9][\wÄÖÜäöüß.\-/]*)?", text) else ""
+
+
+def kurzname(name: str) -> str:
+    """Organisation im Klammerbeleg nach APA 7 kurz: 'Bundesarbeitsgemeinschaft … (BIH)' und 'ABDA – Bundesvereinigung …'
+    werden zu 'BIH' und 'ABDA'; die volle Form steht im Literaturverzeichnis. Ohne Abkürzung bleibt der Name."""
+    name = one_line(name)
+    m = re.fullmatch(r"(.+?)\s*\(([^()]+)\)", name)
+    if m and _abkuerzung(m.group(2)):
+        return m.group(2).strip()
+    head = re.split(r"\s+[–—-]\s+", name, maxsplit=1)
+    return head[0] if len(head) == 2 and _abkuerzung(head[0]) else name
+
+
+def kurztitel(title: str) -> str:
+    """Kurztitel (CSL title-short) für Klammerbelege ohne Autor und für Rechtsquellen, nach APA 7 die ersten Wörter.
+
+    Gesetze mit Abkürzung werden zu 'CanG' oder '§ 33b EStG', EU-Rechtsakte zu 'Verordnung (EU) 2024/1689'; sonst
+    endet der Titel am ersten Doppelpunkt, Gedankenstrich, Klammer oder Komma und hat höchstens vier Wörter. Leer, wenn
+    der Titel schon kurz ist.
+    """
+    title = one_line(title)
+    vorne = re.split(r":\s", title, maxsplit=1)[0]
+    for m in re.finditer(r"\(([^()]+)\)", vorne):
+        abk = next((t for t in reversed(re.split(r"\s*[–—;,]\s*|\s+-\s+", m.group(1))) if _abkuerzung(t)), "")
+        if abk:
+            paragraf = _PARAGRAF_RE.search(title)
+            kurz = f"{paragraf.group(0)} {abk}" if paragraf else abk
+            return kurz if kurz != title else ""
+    eu = _EU_AKT_RE.match(title)
+    if eu:
+        return eu.group(0) if eu.group(0) != title else ""
+    kurz = re.split(r":\s|\s+[–—]\s+|\s+\(|,\s", title, maxsplit=1)[0].strip() or title
+    woerter, gezaehlt = [], 0
+    for wort in kurz.split():
+        gezaehlt += bool(re.search(r"\w", wort))   # „/“ und „&“ zählen nicht als Wort
+        if gezaehlt > 4:
+            while len(woerter) > 1 and woerter[-1].lower() in _FUELLWORT | {"/", "&", "–"}:
+                woerter.pop()
+            kurz = " ".join(woerter)
+            break
+        woerter.append(wort)
+    return kurz if kurz != title else ""
+
+
 def kurzbeleg(csl: dict, narrative: bool = False) -> str:
     """APA-7-Kurzbeleg aus CSL: 'Morath et al., 2024' oder erzählend 'Morath et al. (2024)'."""
     people = csl.get("author") or csl.get("editor") or []
-    names = [a.get("family") or a.get("literal", "?") for a in as_list(people) if isinstance(a, dict)] or ["o. A."]
+    names = [a.get("family") or kurzname(a.get("literal", "?")) for a in as_list(people) if isinstance(a, dict)] or ["o. A."]
     joiner = "und" if narrative else "&"
     if len(names) == 1:
         who = names[0]

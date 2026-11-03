@@ -8,6 +8,8 @@ Je Auftrag liegt eine JSON-Datei unter <bundle>/.auftraege/ (Punkt: aus Seiten, 
 Commit). Beim Laden gelten diese Dateien als ungeprüft, denn auch sie können aus einem fremden Wiki stammen.
 """
 
+import base64
+import datetime as dt
 import hashlib
 import json
 import os
@@ -26,6 +28,7 @@ from pathlib import Path
 
 import okfw_quelle as q
 import rollen
+from okfw_kern import bild as bildplan
 
 VERSION = 1
 VORSCHLAG_ZEIT = 1900   # etwas mehr als das Zeitlimit von rollen.py
@@ -388,7 +391,7 @@ class Schaubild:
         titel, unterschrift = daten.get("titel", ""), daten.get("unterschrift", "")
         if not isinstance(titel, str) or not isinstance(unterschrift, str):
             raise Fehler("titel und unterschrift sind Text")
-        if os.path.lexists(wiki.figure_file(name)):
+        if wiki.figure_taken(name):
             raise Fehler(f"Es gibt schon eine Abbildung {name}. Wähle einen anderen Namen.", 409)
         return {"ziel": f"{core.FIGURES_DIR}/{name}", "titel": titel.strip() or name, "anweisung": beschreibung.strip(), "name": name,
                 "unterschrift": unterschrift.strip(), "warnungen": [], "config": str(sitzung.config_path),
@@ -417,7 +420,126 @@ class Schaubild:
                                  "daten": {"name": eingabe["name"], "svg": svg, "titel": eingabe["titel"], "unterschrift": eingabe["unterschrift"]}}]}
 
 
-TYPEN = {t.name: t for t in (Bearbeiten(), Quelle(), Schaubild())}
+class Bild:
+    """Rasterbilder über die Rolle bild. Gesendet wird nur die Anfrage, die der Dialog vorher zeigt (Prompt und Einstellungen),
+    je Variante ein Aufruf; abgelegt wird erst, was die Person annimmt."""
+
+    name = "bild"
+    rolle = "bild"
+
+    @staticmethod
+    def plan(wiki, daten: dict) -> dict:
+        """Vorschau im Dialog und Start rechnen gleich: dieselbe Funktion wie der Befehl bild."""
+        prompt = daten.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise Fehler("prompt fehlt: Was soll auf dem Bild zu sehen sein?")
+        if len(prompt) > 4000:
+            raise Fehler("Der Prompt ist länger als 4000 Zeichen", 422)
+
+        def text(k: str) -> str | None:
+            wert = daten.get(k)
+            if wert in (None, ""):
+                return None
+            if not isinstance(wert, str) or len(wert) > 2000:
+                raise Fehler(f"{k} ist ein kurzer Text", 422)
+            return wert
+
+        def zahl(k: str) -> int | None:
+            wert = daten.get(k)
+            if wert in (None, ""):
+                return None
+            if isinstance(wert, str) and wert.strip().isdigit():
+                wert = int(wert)
+            if not isinstance(wert, int) or isinstance(wert, bool) or not 0 <= wert <= bildplan.SEED_MAX:
+                raise Fehler(f"{k} ist eine ganze Zahl von 0 bis {bildplan.SEED_MAX}", 422)
+            return wert
+
+        ohne = daten.get("ohne")
+        if isinstance(ohne, str):
+            ohne = [o for o in ohne.split(",") if o.strip()]
+        if ohne is not None and not _textliste(ohne):
+            raise Fehler("ohne ist ein Text oder eine Liste von Texten", 422)
+        mit_text = daten.get("text")
+        if mit_text is not None and not isinstance(mit_text, bool):
+            raise Fehler("text ist ja oder nein", 422)
+        try:
+            return bildplan.planen(prompt, wunsch_text=text("wunsch") or "", stile=wiki.cfg["bild"]["stile"], format=text("format"),
+                                   tempo=text("tempo"), ohne=ohne, seed=zahl("seed"), varianten=zahl("varianten"), mit_text=mit_text,
+                                   stil=text("stil"))
+        except bildplan.BildFehler as exc:
+            raise Fehler(str(exc), 422) from None
+
+    @staticmethod
+    def namen(name: str, n: int) -> list[str]:
+        return [name] if n == 1 else [f"{name}-{i}" for i in range(1, n + 1)]
+
+    def pruefen(self, sitzung, wiki, daten: dict) -> dict:
+        core = sitzung.core
+        name, titel = daten.get("name"), daten.get("titel", "")
+        if not isinstance(name, str) or not core.SLUG_RE.fullmatch(name):
+            raise Fehler("Name: nur kleine Buchstaben, Ziffern und Bindestriche (kebab-case)", 422)
+        if not isinstance(titel, str):
+            raise Fehler("titel ist Text")
+        plan = self.plan(wiki, daten)
+        namen = self.namen(name, plan["varianten"])
+        belegt = [n for n in namen if wiki.figure_taken(n)]
+        if belegt:
+            raise Fehler(f"Es gibt schon eine Abbildung {belegt[0]}. Wähle einen anderen Namen.", 409)
+        seed = plan["nutzlast"]["seed"]
+        return {"ziel": f"{core.FIGURES_DIR}/{name}", "titel": titel.strip() or name, "anweisung": plan["nutzlast"]["prompt"], "name": name,
+                "namen": namen, "nutzlasten": [{**plan["nutzlast"], "seed": seed + i} for i in range(len(namen))],
+                "sekunden": plan["sekunden"], "config": str(sitzung.config_path), "warnungen": plan["hinweise"],
+                "gesendet": {"hinweis": "Gesendet wurde nur die Anfrage aus dem Dialog (Prompt und Einstellungen)"}}
+
+    def laufen(self, eingabe: dict, lauf: Lauf) -> dict:
+        ordner = tempfile.mkdtemp(prefix="okfw-bild-")
+        os.chmod(ordner, 0o700)
+        bilder = []
+        try:
+            for i, (name, nutzlast) in enumerate(zip(eingabe["namen"], eingabe["nutzlasten"]), 1):
+                lauf.melde(f"Bild {i} von {len(eingabe['namen'])} entsteht, etwa {eingabe['sekunden']} s, unter Last länger.")
+                anfrage, aus = Path(ordner) / "anfrage.json", Path(ordner) / "bild.webp"
+                anfrage.write_text(json.dumps(nutzlast, ensure_ascii=False), encoding="utf-8")
+                argv = [sys.executable, "-I", str(Path(__file__).resolve().parent / "rollen.py"), "--wiki", eingabe["config"], "bild",
+                        "--nutzlast", str(anfrage), "--aus", str(aus), "--json"]
+                code, ausgabe, fehler = rollen_aufruf(argv, ordner, lauf.abbruch)
+                if code != 0:
+                    raise Fehler((fehler or ausgabe).strip().removeprefix("rollen: ") or f"rollen.py endete mit Exit {code}", 502)
+                try:
+                    info = json.loads(ausgabe)
+                    roh = aus.read_bytes()
+                except (ValueError, OSError):
+                    raise Fehler("Unerwartete Antwort von rollen.py (kein Bild)", 502) from None
+                bilder.append({"name": name, "anfrage": nutzlast, "info": info if isinstance(info, dict) else {},
+                               "webp": base64.b64encode(roh).decode("ascii")})
+        finally:
+            shutil.rmtree(ordner, ignore_errors=True)
+        erstes = bilder[0]["info"]
+        return {"bilder": bilder, **{k: erstes.get(k) for k in ("harness", "anbieter", "modell")},
+                "dauer_s": round(sum(float(b["info"].get("dauer_s") or 0) for b in bilder), 1) or None}
+
+    def auswerten(self, sitzung, wiki, eingabe: dict, antwort: dict) -> dict:
+        core = sitzung.core
+        aenderungen = []
+        for b in antwort["bilder"]:
+            try:
+                data, (w, h), _ = core.clean_webp(base64.b64decode(b["webp"]))
+            except (core.FigureError, ValueError) as exc:
+                raise Fehler(f"Das Modell hat kein brauchbares WebP geliefert ({exc}). Gibt der Anbieter output_format webp aus?") from None
+            info = b["info"]
+            nachweis = {"anbieter": str(info.get("anbieter") or ""), "endpunkt": "POST /images/generations",
+                        "modell": str(info.get("modell") or ""), "anfrage": b["anfrage"], "dauer_s": info.get("dauer_s"),
+                        **({"antwort": info["meta"]} if isinstance(info.get("meta"), dict) and info["meta"] else {})}
+            aenderungen.append({"art": "bild", "ziel": f"{core.FIGURES_DIR}/{b['name']}", "basis": "",
+                                "daten": {"name": b["name"], "titel": eingabe["titel"], "webp": base64.b64encode(data).decode("ascii"),
+                                          "groesse": f"{w}x{h}", "nachweis": nachweis}})
+        warnungen = [*eingabe["warnungen"], "Das Bild ist eine Illustration, kein Beleg. Prüfe, ob es etwas zeigt, das so nicht stimmt."]
+        if len(aenderungen) > 1:
+            warnungen.append("Nimm die Variante an, die passt, und verwirf die anderen; nur Angenommenes wird abgelegt.")
+        return {"warnungen": warnungen, "aenderungen": aenderungen}
+
+
+TYPEN = {t.name: t for t in (Bearbeiten(), Quelle(), Schaubild(), Bild())}
 
 
 # ---------------------------------------------------------------- Änderungsarten
@@ -538,7 +660,40 @@ class Konzeptkarte:
         return a
 
 
-ARTEN = {"koerper": Koerper, "abbildung": Abbildung, "quelle": Quellenkarte, "seite": Konzeptkarte}
+class Rasterbild:
+    @staticmethod
+    def gueltig(daten) -> bool:
+        return (isinstance(daten, dict) and all(_ist_text(daten.get(k)) for k in ("name", "titel", "webp", "groesse"))
+                and isinstance(daten.get("nachweis"), dict))
+
+    @staticmethod
+    def annehmen(sitzung, auftrag: dict, a: dict) -> dict:
+        """Über den Kern wie jede Abbildung: Er bereinigt erneut und schreibt das Ereignis mit der Anfrage; vorhanden heißt 409."""
+        d = a["daten"]
+        modell = auftrag["rolle"]["modell"] or sitzung.core.MODELL_UNBEKANNT
+        try:
+            roh = base64.b64decode(d["webp"], validate=True)
+        except ValueError:
+            raise Fehler("Das gespeicherte Bild ist beschädigt", 422) from None
+        antwort = sitzung.bild_ablegen(d["name"], roh, modell, d["nachweis"])
+        anbieter = sitzung.cfg()["anbieter"].get(auftrag["rolle"]["anbieter"], {}).get("name") or auftrag["rolle"]["anbieter"]
+        zeile = bildplan.unterschrift(d["titel"], modell, anbieter, dt.date.today().isoformat())
+        return {**antwort, "titel": d["titel"], "einbindung": f"![{d['titel']}]({antwort['pfad']})\n{zeile}"}
+
+    @staticmethod
+    def zum_lesen(sitzung, a: dict) -> dict:
+        """Die Vorschau kommt frisch aus der Bereinigung, als data: wie in der Leseansicht."""
+        core = sitzung.core
+        daten = {k: v for k, v in a["daten"].items() if k != "webp"}
+        try:
+            data, _, _ = core.clean_webp(base64.b64decode(a["daten"]["webp"], validate=True))
+            daten["vorschau"] = "data:image/webp;base64," + base64.b64encode(data).decode("ascii")
+        except (core.FigureError, ValueError) as exc:
+            daten["abgelehnt"] = str(exc)
+        return {**a, "daten": daten}
+
+
+ARTEN = {"koerper": Koerper, "abbildung": Abbildung, "quelle": Quellenkarte, "seite": Konzeptkarte, "bild": Rasterbild}
 
 
 # ---------------------------------------------------------------- Maschine

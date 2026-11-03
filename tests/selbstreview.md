@@ -46,7 +46,7 @@ Auftrag an jeden Helfer:
 
 Was das Skript nicht ausliest, bekommt eigene Gruppen: `okfw_serve.py` (Routen, Statuscodes, Köpfe), `rollen.py` (Unterbefehle,
 Optionen, Exit-Codes, Sperren), `anbieter.toml`, `skills/recherche/scripts/api.py` und die Skills `recherche` und `lesen` (jeder
-Befehl und jede Option, die sie nennen, gegen den Code). Dafür stellt der Hauptagent den Stand mit `git archive <rev> plugins/okfw`
+Befehl und jede Option, die sie nennen, gegen den Code). Dafür stellt der Hauptagent den Stand mit `git archive <rev>`
 bereit. Genau hier fallen Optionen, Felder und Befehle durchs mechanische Raster, die kein Doku-Eintrag erwähnt.
 
 Der Hauptagent prüft jede Fundstelle am Original unter `_stand/`, verwirft, was nicht trägt, und setzt die

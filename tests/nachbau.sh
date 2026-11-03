@@ -276,7 +276,7 @@ cat >"$WORK/schaubild.svg" <<'EOF'
   <rect x="60" y="10" width="40" height="40" fill="none" stroke="#333333"/>
 </svg>
 EOF
-step "rollen.py status --json läuft ohne Einrichtung: Rollen sitzung, claude, container, Anthropic, keine Warnung" '
+step "rollen.py status --json läuft ohne Einrichtung: Textrollen sitzung, claude, container über Anthropic, Bilder ab Werk aus, keine Warnung" '
 test ! -e "$HOME/.config/okfw" && echo "keine Einstellungsdatei unter ~/.config/okfw"
 uv run --no-config --quiet "$P/skills/okfw/rollen.py" status --json >"$WORK/rollen.json"; rc=$?; echo "rollen.py Exit $rc"; test $rc -eq 0 || exit 1
 uv run --no-config --quiet --no-project python - "$WORK/rollen.json" <<"PY"
@@ -285,13 +285,17 @@ d = json.load(open(sys.argv[1], encoding="utf-8"))
 r = d["rollen"]
 for k, v in r.items():
     print("Rolle", k, "| Harness", v["harness"], "| Anbieter", v["anbieter"], "| Modell", v["modell"], "| Herkunft", v["herkunft"]["harness"])
+# Bilder gehen direkt an einen OpenAI-kompatiblen Endpunkt und bleiben aus, bis jemand ein Modell wählt
+bild = r.pop("bild")
+assert (bild["harness"], bild["anbieter"], bild["modell"]) == ("direkt", "openai", ""), "Bilder ab Werk direkt über OpenAI, ohne Modell"
+assert bild["gesperrt"] == "kein Modell gewählt", "Bilder ab Werk aus"
 assert {v["harness"] for v in r.values()} == {"sitzung", "claude", "container"}, "Harnesses"
 assert {v["anbieter"] for v in r.values()} == {"anthropic"}, "Anbieter"
 assert r["lesen"]["modell"] != r["gegenpruefen"]["modell"], "Lesen und Gegenprüfen ab Werk mit verschiedenem Modell"
 assert d["warnungen"] == [], "ab Werk keine Warnung"
 assert d["sitzung"] == "anthropic", "Sitzung über Anthropic"
 assert set(d["anbieter"]) == {"anthropic", "openai", "openrouter", "ollama"}, "nur die mitgelieferten Anbieter"
-assert not any(v["gesperrt"] for v in r.values()), "keine Rolle gesperrt"
+assert not any(v["gesperrt"] for v in r.values()), "keine Textrolle gesperrt"
 print("Anbieter im Katalog:", ", ".join(d["anbieter"]))
 print("Sitzung über:", d["sitzung"], "| Warnungen:", d["warnungen"])
 PY

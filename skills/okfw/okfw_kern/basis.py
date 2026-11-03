@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-VERSION = "0.7.1"
+VERSION = "0.7.2"
 SKILL_DIR = Path(__file__).resolve().parent.parent
 RESERVED = {"index.md", "log.md"}
 STATUS = ("draft", "stable", "deprecated")
@@ -32,11 +32,13 @@ H2_RE = re.compile(r"^## +(.+?)\s*$", re.M)
 CONTRADICTION_RE = re.compile(r"⚠️\s*\*\*Widerspruch:?\*\*")
 # ausdrücklicher Prüfvermerk: „zu prüfen“ am Blockanfang, in Anführungszeichen oder Klammern, nicht im Fließtext
 CHECK_RE = re.compile(r"^\W*zu prüfen\b|[„“”\"‚‘(\[]\s*zu prüfen\b|\bzu prüfen\s*[)\]“”\"‘’]", re.I)
-# Schaubilder: <bundle>/abbildungen/<name>.svg, eingebunden als ![Titel](/abbildungen/name.svg) und darunter *Abb. …*
+# Abbildungen: <bundle>/abbildungen/<name>.svg (Schaubild) oder .webp (Rasterbild), eingebunden als
+# ![Titel](/abbildungen/name.svg) und darunter *Abb. …*; ein Name gilt für genau eine Datei
 FIGURES_DIR = "abbildungen"
 PAPIERKORB = ".papierkorb"   # im Bundle; der Punkt hält ihn aus Seiten, Indexen und Lint
 AUFTRAEGE = ".auftraege"     # ebenso: Aufträge und Vorschläge von `serve`, mit eigener .gitignore
-FIGURE_SRC_RE = re.compile(r"^/abbildungen/([a-z0-9]+(?:-[a-z0-9]+)*)\.svg$")
+FIGURE_EXTS = ("svg", "webp")
+FIGURE_SRC_RE = re.compile(r"^/abbildungen/([a-z0-9]+(?:-[a-z0-9]+)*)\.(svg|webp)$")
 IMAGE_RE = re.compile(r"!\[([^\]\n]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 FIGURE_CAPTION_RE = re.compile(r"^\s*\*Abb\.")
 # Datenklassen eines Wikis ([rollen] daten); dieselben prüft rollen.py
@@ -107,12 +109,12 @@ def _manifest_lesen(pfad: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def replace_file(path: Path, text: str) -> None:
+def replace_file(path: Path, text: str | bytes) -> None:
     """Schreibt über eine Zwischendatei im selben Ordner: Ein Abbruch hinterlässt die alte Fassung, und ein Symlink am
-    Ziel wird ersetzt, nicht durchschrieben."""
+    Ziel wird ersetzt, nicht durchschrieben. bytes für Rasterbilder."""
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with (os.fdopen(fd, "wb") if isinstance(text, bytes) else os.fdopen(fd, "w", encoding="utf-8")) as f:
             f.write(text)
         regular = path.is_file() and not path.is_symlink()
         os.chmod(tmp, path.stat().st_mode & 0o777 if regular else 0o644)

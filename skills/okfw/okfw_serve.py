@@ -44,7 +44,7 @@ COOKIE = "okfw_sitzung"   # Vorsilbe; dahinter eine Kennung je Serverstart
 MARKE = '<script type="application/json" id="okf-data">'
 # Die Schreibschicht in dieser Folge; `render_dashboard` kennt keine davon, die Datei zum Weitergeben bleibt ohne sie
 SERVE_CSS = ("serve.css", "auftraege.css")
-SERVE_JS = ("serve.js", "auftraege.js", "auftrag_bearbeiten.js", "auftrag_schaubild.js", "auftrag_quelle.js")
+SERVE_JS = ("serve.js", "auftraege.js", "auftrag_bearbeiten.js", "auftrag_schaubild.js", "auftrag_bild.js", "auftrag_quelle.js")
 HARNESS_KANN = {
     "sitzung": "Die laufende Claude-Code-Sitzung als Unteragent. Der Server startet keinen Prozess und kann sie nicht bedienen.",
     "claude": "claude -p ohne Werkzeuge. Mit Anthropic über die Anmeldung, mit anderen Anbietern über einen Anthropic-kompatiblen Endpunkt.",
@@ -396,7 +396,7 @@ class Sitzung:
         if not vorhanden:
             return {"vorhanden": False}
         stamm = re.sub(r"-\d+$", "", name)
-        zahl = next(n for n in itertools.count(2) if not os.path.lexists(wiki.figure_file(f"{stamm}-{n}")))
+        zahl = next(n for n in itertools.count(2) if not wiki.figure_taken(f"{stamm}-{n}"))
         return {"vorhanden": True, "vorschlag": f"{stamm}-{zahl}",
                 "genutzt_auf": [p.title or p.id for p in wiki.pages()
                                 if any(ref["name"] == name for ref in wiki.figure_refs(p.body))]}
@@ -499,7 +499,7 @@ class Sitzung:
         with self.lock:
             akteur = self.akteur()
             wiki = self.wiki()
-            vorhanden = os.path.lexists(wiki.figure_file(name))
+            vorhanden = bool(wiki.figure_taken(name))
             if pruefen:
                 return 200, {"ok": True, "name": name, "svg": vorschau, **core.svg_verlust(entfernt),
                              **self.abbildung_auskunft(wiki, name, vorhanden)}
@@ -524,6 +524,53 @@ class Sitzung:
             return 200, {"ok": True, "name": name, "pfad": f"/abbildungen/{name}.svg",
                          "einbindung": f"![Titel](/abbildungen/{name}.svg)", "ausgabe": lauf.stdout.strip(),
                          "ersetzt": vorhanden, **core.svg_verlust(entfernt)}
+
+    def bild_ablegen(self, name: str, roh: bytes, modell: str, nachweis: dict) -> dict:
+        """Nur ein angenommener Bildvorschlag ruft das: Der Kern prüft und bereinigt das WebP, legt es ab und schreibt das
+        Ereignis mit Rolle bild und der Anfrage. Vorhanden heißt 409, ersetzt wird auf diesem Weg nie."""
+        core = self.core
+        if not core.SLUG_RE.fullmatch(name):
+            raise Fehler("Name: nur kleine Buchstaben, Ziffern und Bindestriche (kebab-case)", 422)
+        with self.lock:
+            akteur = self.akteur()
+            if self.wiki().figure_taken(name):
+                raise Fehler(f"Es gibt schon eine Abbildung {name}. Verwirf diese Variante oder benenne die vorhandene um.", 409)
+            ordner = tempfile.mkdtemp(prefix="okfw-bild-")
+            try:
+                datei, anfrage = Path(ordner) / f"{name}.webp", Path(ordner) / "anfrage.json"
+                datei.write_bytes(roh)
+                anfrage.write_text(json.dumps(nachweis, ensure_ascii=False), encoding="utf-8")
+                lauf = subprocess.run([sys.executable, core.__file__, "--config", str(self.config_path), "abbildung", name, "--file", str(datei),
+                                       "--rolle", "bild", "--modell", modell, "--anfrage", str(anfrage)],
+                                      env={**os.environ, "WIKI_ACTOR": akteur}, capture_output=True, text=True, timeout=120)
+            finally:
+                shutil.rmtree(ordner, ignore_errors=True)
+            if lauf.returncode != 0:
+                text = (lauf.stderr or lauf.stdout).strip()
+                if "Traceback" in text:
+                    raise Fehler(f"Der Kern ist beim Ablegen gescheitert: {text.splitlines()[-1]}", 500)
+                raise Fehler(text.removeprefix("okfw: ") or "abbildung scheiterte", 422)
+            return {"ok": True, "name": name, "pfad": f"/abbildungen/{name}.webp", "ausgabe": lauf.stdout.strip()}
+
+    def bild_vorschau(self, daten: dict):
+        """Für den Dialog „Bild erzeugen“: was gesendet würde, mit Erklärungen, ohne zu senden und ohne zu schreiben."""
+        Bild, bildplan = okfw_auftraege.Bild, okfw_auftraege.bildplan
+        with self.lock:
+            wiki, cfg = self.wiki(), self.cfg()
+            ziel = rollen.loese(cfg, "bild")
+            stile = wiki.cfg["bild"]["stile"]
+            if not str(daten.get("prompt") or "").strip():
+                daten = {**daten, "prompt": "…"}   # Worte übernehmen geht auch vor dem Prompt
+            plan = Bild.plan(wiki, daten)
+            name = daten.get("name")
+            belegt = [n for n in Bild.namen(name, plan["varianten"]) if wiki.figure_taken(n)] if isinstance(name, str) and self.core.SLUG_RE.fullmatch(name) else []
+        anbieter = cfg["anbieter"].get(ziel["anbieter"], {})
+        return 200, {"einstellungen": plan["einstellungen"], "erkannt": plan["erkannt"], "erklaerung": plan["erklaerung"],
+                     "hinweise": plan["hinweise"], "sekunden": plan["sekunden"], "gesendet": {"model": ziel["modell"], **plan["nutzlast"]},
+                     "rolle": {"modell": ziel["modell"], "anbieter": anbieter.get("name", ziel["anbieter"]), "gesperrt": ziel["gesperrt"]},
+                     "datenklasse": cfg["daten"], "belegt": belegt,
+                     "formate": {k: f"{b}x{h}" for k, (b, h) in bildplan.FORMATE.items()},
+                     "stile": {"eigene": sorted(stile), "eingebaut": list(bildplan.STILE)}}
 
     # ---------------------------------------------------------------- Einstellungen
 
@@ -590,13 +637,13 @@ class Sitzung:
             rollen.setze_person(kennung.strip())
             return 200, self.einstellungen()
 
-    def modelle(self, anbieter):
+    def modelle(self, anbieter, bild: bool = False):
         with self.lock:
             cfg = self.cfg()
         if not isinstance(anbieter, str) or anbieter not in cfg["anbieter"]:
             raise Fehler("Unbekannter Anbieter", 404)
         try:
-            return 200, {"anbieter": anbieter, "modelle": rollen.modelle(cfg, anbieter)}
+            return 200, {"anbieter": anbieter, "modelle": rollen.modelle(cfg, anbieter, bild=bild)}
         except rollen.Fehler as exc:
             raise Fehler(str(exc), 502 if exc.code == rollen.EXIT_HARNESS else 422)
 
@@ -760,7 +807,7 @@ class Griff(http.server.BaseHTTPRequestHandler):
                       "/api/folgen": lambda: sitzung.folgen_lesen((abfrage.get("id") or [""])[0]),
                       "/api/papierkorb": sitzung.papierkorb_lesen,
                       "/api/einstellungen": sitzung.einstellungen_lesen,
-                      "/api/modelle": lambda: sitzung.modelle((abfrage.get("anbieter") or [""])[0]),
+                      "/api/modelle": lambda: sitzung.modelle((abfrage.get("anbieter") or [""])[0], (abfrage.get("bild") or [""])[0] == "1"),
                       "/api/design": sitzung.design_lesen,
                       "/api/auftraege": sitzung.auftraege.liste,
                       "/api/auftrag": lambda: sitzung.auftraege.lesen((abfrage.get("id") or [""])[0]),
@@ -809,7 +856,7 @@ class Griff(http.server.BaseHTTPRequestHandler):
                   "/api/auftrag": sitzung.auftraege.starten, "/api/auftrag/abbrechen": sitzung.auftraege.abbrechen,
                   "/api/vorschlag/annehmen": sitzung.auftraege.annehmen, "/api/vorschlag/verwerfen": sitzung.auftraege.verwerfen,
                   "/api/quelle/klaeren": sitzung.auftraege.klaeren, "/api/quelle/karte": sitzung.auftraege.karte_ohne_modell,
-                  "/api/abloesen": sitzung.abloesen,
+                  "/api/abloesen": sitzung.abloesen, "/api/bild/vorschau": sitzung.bild_vorschau,
                   "/api/loeschen": sitzung.loeschen, "/api/wiederherstellen": sitzung.wiederherstellen,
                   "/api/pfad": sitzung.pfad_speichern, "/api/pfad/neu": sitzung.pfad_neu,
                   "/api/pfad/uebernehmen": sitzung.pfad_uebernehmen}

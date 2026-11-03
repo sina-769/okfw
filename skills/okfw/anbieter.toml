@@ -52,3 +52,10 @@ modell = "sonnet"
 harness = "container"
 anbieter = "anthropic"
 modell = "sonnet"
+
+# Bilder: nur direkt über /images/generations eines OpenAI-kompatiblen Anbieters. Ab Werk ohne Modell, also aus:
+# in den Einstellungen Anbieter wählen und „Modelle laden“ (zeigt nur Bildmodelle, wo der Anbieter modality nennt).
+[rollen.bild]
+harness = "direkt"
+anbieter = "openai"
+modell = ""

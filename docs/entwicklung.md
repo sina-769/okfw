@@ -37,9 +37,20 @@ Claude Code, über `uv run --no-config --script`, je in einem frischen Wiki unte
 hält Doku und Code zusammen: Jeder Befehl, jede Lint-Regel, jeder Schlüssel der `wiki.toml` und jeder Hook steht in der
 Doku und wird von einem Test berührt, und was die Doku nennt, gibt es im Code.
 
+Der eine Prüfbefehl, gleich für Menschen, Agenten und CI:
+
 ```bash
-uv run --with pyyaml --with markdown python -m unittest        # im Plugin-Ordner
+tests/pruefen.sh
 ```
+
+Er führt die Python-Tests und die Prüfung von `web-zugriff` aus (ohne Docker) und endet bei jedem Fehler mit Exit ≠ 0; die Tests binden
+lokale Ports. [.github/workflows/tests.yml](../.github/workflows/tests.yml) ruft nur dieses Skript auf. Einzelne Tests gehen weiter so:
+
+```bash
+uv run --with pyyaml --with markdown python -m unittest tests.test_abdeckung   # im Plugin-Ordner
+```
+
+Die Arbeitsanleitung für Agenten steht in [.claude/CLAUDE.md](../.claude/CLAUDE.md), was okfw ist und nicht ist in [richtung.md](richtung.md).
 
 ## Nachbau-Test
 
@@ -63,12 +74,19 @@ im Protokoll, und das Protokoll trägt den Vermerk „Unvollständig“.
 
 Die Protokolle hängen an den Releases.
 
+## Beiträge
+
+Pull Requests gehen gegen `main` des öffentlichen Repos; `tests/pruefen.sh` sollte vorher grün sein. Dort liegt nur, was veröffentlicht ist:
+Jede Version entsteht in einem Arbeitsrepo und kommt nach den Release-Schritten als ein Commit dorthin. Ein angenommener Beitrag wird darum
+nicht dort gemergt, sondern ins Arbeitsrepo übernommen, mit dir als Autor, und kommt mit der nächsten Version zurück; deren Commit nennt dich
+als Co-Autor. Fragen und Vorschläge ohne Code gehen als Issue.
+
 ## Release-Schritte
 
 Die Tests laufen bei jedem Pull Request auf GitHub ([.github/workflows/tests.yml](../.github/workflows/tests.yml)). Vor
 jeder Version:
 
-1. **Prüfen:** alle Testmodule und die Tests der Anwendungen auf der
+1. **Prüfen:** `tests/pruefen.sh` und die Tests der Anwendungen auf der
    [festen Schnittstelle](../skills/okfw/docs/konfiguration.md#feste-schnittstelle). Weiter nur bei Grün.
 2. **Diff prüfen:** Der Diff seit dem letzten Release wird in Pakete bis 60.000 Zeichen zerlegt, jedes mit dem
    [Angreifermodell](../tests/angreifer.md). Ein Modell, das nicht gebaut hat, liest jedes Paket einmal als Code-Review

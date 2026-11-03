@@ -6,10 +6,11 @@
 
   rollen.py status [--json]                         Harnesses, Anbieter, Rollen, ohne Modellaufruf
   rollen.py zeige <rolle> [--json]                  aufgelöste Rolle mit Herkunft und Sperre
-  rollen.py modelle <anbieter> [--json]             Modellliste des Anbieters (Vorschlag, kein Zwang)
+  rollen.py modelle <anbieter> [--bild] [--json]    Modellliste des Anbieters (Vorschlag, kein Zwang); --bild: nur Bildmodelle
   rollen.py setze <rolle> --harness … --anbieter … --modell …
   rollen.py anbieter <id> --name … --openai URL --schluessel NAME …  |  --entfernen
   rollen.py auftrag --rolle lesen --datei auftrag.md [--anhang datei]… [--trocken] [--json] [--ohne-wiki]
+  rollen.py bild --nutzlast anfrage.json --aus bild.webp [--json]   ein Bild über die Rolle bild (für okfw serve)
 
 `auftrag` braucht eine wiki.toml (--wiki oder aufwärts ab dem Arbeitsordner), sonst Exit 2: Ohne sie wären die Sperren
 des Wikis nicht geprüft. Ausdrücklich `--ohne-wiki` gilt die strengste Datenklasse `personenbezogen`.
@@ -35,6 +36,7 @@ Exit: 0 ok · 2 Bedienfehler oder Sperre · 3 Harness oder Anbieter gescheitert 
 """
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -55,7 +57,8 @@ from pathlib import Path
 HIER =Path(__file__).resolve().parent
 WERK = HIER / "anbieter.toml"
 LOKAL = HIER / "einstellungen.local.toml"
-ROLLEN = {"lesen": "Lesen", "gegenpruefen": "Gegenprüfen", "bearbeiten": "Bearbeiten per Prompt", "webabruf": "Webabruf"}
+ROLLEN = {"lesen": "Lesen", "gegenpruefen": "Gegenprüfen", "bearbeiten": "Bearbeiten per Prompt", "webabruf": "Webabruf",
+          "bild": "Bilder erzeugen"}
 HARNESSE = {
     "sitzung": {"name": "Laufende Claude-Code-Sitzung", "formen": ["sitzung"], "programm": ""},
     "claude": {"name": "Claude Code (claude -p)", "formen": ["anthropic"], "programm": "claude"},
@@ -84,6 +87,7 @@ PLATTFORM_SCHALTER = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAU
 OHNE_WIKI = "Keine wiki.toml gefunden: Sperren und Datenklasse des Wikis konnten nicht geprüft werden (--wiki angeben)."
 EXIT_FEHLER, EXIT_HARNESS, EXIT_SITZUNG = 2, 3, 10
 ZEITLIMIT = 1800
+BILD_ZEITLIMIT = 300   # meist 5–25 s, unter Last bis 250 s gemessen
 AUSGABE_MAX = 16000
 WORKER_SYSTEM = (
     "Du erledigst genau den Auftrag und antwortest nur mit dem verlangten Ergebnis. Du hast keine Werkzeuge. "
@@ -264,6 +268,8 @@ def loese(cfg: dict, rolle: str) -> dict:
         aus["gesperrt"] = f"unbekannte Harness {harness!r}"
     elif anbieter is None:
         aus["gesperrt"] = f"unbekannter Anbieter {anbieter_id!r}"
+    elif rolle == "bild" and not (harness == "direkt" and anbieter.get("openai")):
+        aus["gesperrt"] = "Bilder entstehen nur direkt über einen OpenAI-kompatiblen Endpunkt (/images/generations)"
     elif (rolle == "webabruf") != (harness == "container"):
         aus["gesperrt"] = "Webabruf läuft nur im Container" if rolle == "webabruf" else "Container nur für den Webabruf"
     elif harness == "container":
@@ -451,7 +457,9 @@ def kopfzeilen(form: str, key: str) -> dict:
     return {"authorization": f"Bearer {key}"} if key else {}
 
 
-def modelle(cfg: dict, anbieter_id: str) -> list[str]:
+def modelle(cfg: dict, anbieter_id: str, bild: bool = False) -> list[str]:
+    """Modell-IDs des Anbieters. bild: nur Modelle mit modality "image"; nennt der Anbieter kein Feld modality (OpenAI
+    nennt keins), bleiben alle stehen und die Wahl liegt bei der Person."""
     anbieter = cfg["anbieter"].get(anbieter_id)
     if anbieter is None:
         raise Fehler(f"unbekannter Anbieter {anbieter_id!r}")
@@ -470,7 +478,12 @@ def modelle(cfg: dict, anbieter_id: str) -> list[str]:
     except Fehler as exc:
         raise Fehler(schwaerzen(str(exc), key), exc.code) from exc
     liste = antwort.get("data")
-    return sorted(m["id"] for m in liste if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]) if isinstance(liste, list) else []
+    if not isinstance(liste, list):
+        return []
+    liste = [m for m in liste if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]]
+    if bild and any("modality" in m for m in liste):
+        liste = [m for m in liste if m.get("modality") == "image"]
+    return sorted(m["id"] for m in liste)
 
 
 # --- Einstellungen schreiben: nur die Nutzerdatei, nie die wiki.toml --------------------------------------
@@ -642,6 +655,34 @@ def lauf_direkt(ziel: dict, anbieter: dict, key: str, auftrag: str) -> str:
     if isinstance(inhalt, list):   # manche Anbieter liefern Teile statt eines Textes
         inhalt = "".join(str(t.get("text", "")) for t in inhalt if isinstance(t, dict))
     return str(inhalt)
+
+
+def bild_direkt(ziel: dict, anbieter: dict, key: str, nutzlast: dict, zeit: int = BILD_ZEITLIMIT) -> tuple[bytes, dict]:
+    """Ein Bild über /images/generations (OpenAI-Form). nutzlast stellt der Kern zusammen (nur geprüfte Felder); zurück
+    kommen die Bytes des ersten Bildes und die übrigen Angaben der Antwort ohne Bilddaten."""
+    if ziel["rolle"] != "bild" or ziel["form"] != "openai":
+        raise Fehler("Bilder nur über die Rolle bild in OpenAI-Form")
+    antwort = http(anbieter["openai"].rstrip("/") + "/images/generations", kopfzeilen("openai", key),
+                   {**nutzlast, "model": ziel["modell"]}, zeit=zeit)
+    daten = antwort.get("data")
+    erstes = daten[0] if isinstance(daten, list) and daten and isinstance(daten[0], dict) else {}
+    roh = erstes.get("b64_json")
+    if not isinstance(roh, str) or not roh:
+        raise Fehler("Die Antwort enthält kein Bild (b64_json fehlt)", EXIT_HARNESS)
+    try:
+        bild = base64.b64decode(roh, validate=True)
+    except ValueError as exc:
+        raise Fehler("Die Antwort enthält kein lesbares Bild (b64_json)", EXIT_HARNESS) from exc
+    # Die Angaben gehen ins Ereignis: nur kurze Werte unter einfachen Namen, und nie ein gespiegelter Key
+    meta = {}
+    for k, v in {**antwort, **erstes}.items():
+        if len(meta) >= 12 or k in ("data", "b64_json", "url") or not re.fullmatch(r"[a-z_]{1,40}", str(k)):
+            continue
+        if isinstance(v, str):
+            meta[k] = schwaerzen(v, key)[:300]
+        elif isinstance(v, (int, float)) and not isinstance(v, bool):
+            meta[k] = v
+    return bild, meta
 
 
 def befehl_claude(ziel: dict, anbieter: dict, key: str) -> tuple[list[str], dict]:
@@ -830,6 +871,7 @@ def main(argv=None) -> int:
     q = u.add_parser("status"); q.add_argument("--json", action="store_true")
     q = u.add_parser("zeige"); q.add_argument("rolle"); q.add_argument("--json", action="store_true")
     q = u.add_parser("modelle"); q.add_argument("anbieter"); q.add_argument("--json", action="store_true")
+    q.add_argument("--bild", action="store_true", help="nur Bildmodelle (modality image, wo der Anbieter das Feld nennt)")
     q = u.add_parser("setze"); q.add_argument("rolle")
     for feld in ROLLEN_FELDER:
         q.add_argument(f"--{feld}", required=True)
@@ -841,6 +883,8 @@ def main(argv=None) -> int:
     q.add_argument("--datei"); q.add_argument("--anhang", action="append", default=[])
     q.add_argument("--trocken", action="store_true"); q.add_argument("--json", action="store_true")
     q.add_argument("--ohne-wiki", action="store_true", help="ohne wiki.toml laufen; es gilt die Datenklasse personenbezogen")
+    q = u.add_parser("bild"); q.add_argument("--nutzlast", required=True, help="JSON der Anfrage ohne model (stellt okfw zusammen)")
+    q.add_argument("--aus", required=True, help="Datei, in die das Bild geschrieben wird"); q.add_argument("--json", action="store_true")
     a = p.parse_args(argv)
     try:
         cfg = lade(Path(a.wiki).expanduser() if a.wiki else None)
@@ -854,7 +898,7 @@ def main(argv=None) -> int:
                      + (f"\n⚠ {z['gesperrt']}" if z["gesperrt"] else "")
                      + (f"\n⚠ {z['hinweis']}" if z["hinweis"] else ""))
         elif a.befehl == "modelle":
-            m = modelle(cfg, a.anbieter)
+            m = modelle(cfg, a.anbieter, bild=a.bild)
             ausgeben(m, a.json, "\n".join(m))
         elif a.befehl == "setze":
             setze_rolle(a.rolle, a.harness, a.anbieter, a.modell)
@@ -886,6 +930,25 @@ def main(argv=None) -> int:
                 raise Fehler("Auftrag fehlt (Text oder --datei)")
             ergebnis = fuehre_aus(cfg, a.rolle, text, anhaenge_lesen(a.anhang), a.trocken)
             ausgeben(ergebnis, a.json or a.trocken, ergebnis["text"])
+        elif a.befehl == "bild":
+            if not cfg["wiki"]:
+                raise Fehler(OHNE_WIKI)
+            ziel = loese(cfg, "bild")
+            if ziel["gesperrt"]:
+                raise Fehler(f"Rolle bild: {ziel['gesperrt']}")
+            anbieter = cfg["anbieter"][ziel["anbieter"]]
+            nutzlast = json.loads(Path(a.nutzlast).read_text(encoding="utf-8"))
+            if not isinstance(nutzlast, dict):
+                raise Fehler("--nutzlast: ein JSON-Objekt")
+            key = schluessel_holen(anbieter)
+            if not key and schluessel_quelle(anbieter) == "fehlt":
+                raise Fehler(schluessel_anleitung(ziel["anbieter"], anbieter))
+            start = time.monotonic()
+            bild, meta = bild_direkt(ziel, anbieter, key, nutzlast)
+            Path(a.aus).write_bytes(bild)
+            ergebnis = {**{k: ziel[k] for k in ("harness", "anbieter", "modell")}, "bytes": len(bild), "meta": meta,
+                        "dauer_s": round(time.monotonic() - start, 1)}
+            ausgeben(ergebnis, a.json, f"{a.aus}: {len(bild)} Byte von {ziel['modell']}")
     except Fehler as exc:
         print(f"rollen: {exc}", file=sys.stderr)
         return exc.code

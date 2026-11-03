@@ -67,6 +67,10 @@ Eine Abbildung kommt als SVG; der Kern prüft und bereinigt sie und legt sie unt
 
 ![Dialog „Abbildung einfügen“ mit Feldern für Dateiname, Titel, Unterschrift und Beleg, dazu SVG-Datei oder SVG-Text; darunter „Oder beschreiben“ mit dem Knopf „Entwurf holen“](bearbeiten-abbildung.png)
 
+Ein Rasterbild kann ein Bildmodell erzeugen. Der Dialog übernimmt Wünsche in Worten in die Schalter und zeigt vor dem Senden, was hinausgeht; abgelegt wird erst die Variante, die man annimmt:
+
+![Dialog „Bild erzeugen“: Name, Titel, Beschreibung des Motivs und „breit für eine Folie, schneller Entwurf, zwei Varianten, flache Illustration“ als Wunsch; darunter Format quer, Tempo Entwurf, zwei Varianten, Stil flache Illustration, Seed, Modell und Anbieter der Rolle, die Erklärungen und aufgeklappt die Anfrage ohne Schlüssel](bearbeiten-bild.png)
+
 Der Reiter Eigenschaften zeigt das Frontmatter als Felder; geschützte Felder ändert nur der Kern:
 
 ![Reiter Eigenschaften: Felder für type, title, description, Suchbegriffe und sources; status und generated sind ausgegraut, darunter „Neues Feld“](bearbeiten-eigenschaften.png)
@@ -116,11 +120,11 @@ der `wiki.toml` des Wikis (`--wiki`) und ohne sie nur ausdrücklich mit `--ohne-
 
 Die Rollen in den Einstellungen des Dashboards, ab Werk:
 
-![Einstellungen, Reiter Rollen: die Rollen Lesen, Gegenprüfen, Bearbeiten per Prompt und Webabruf, je mit Auswahl für Harness und Anbieter, Feld für das Modell und den Knöpfen „Modelle laden“ und „Speichern“](einstellungen-rollen.png)
+![Einstellungen, Reiter Rollen: die Rollen Lesen, Gegenprüfen, Bearbeiten per Prompt, Webabruf und Bilder erzeugen (hier über einen eigenen Anbieter), je mit Auswahl für Harness und Anbieter, Feld für das Modell und den Knöpfen „Modelle laden“ und „Speichern“](einstellungen-rollen.png)
 
 Die Anbieter ab Werk. Die Seite zeigt nur, ob ein Key da ist, und gibt den Befehl zum Ablegen im eigenen Terminal:
 
-![Einstellungen, Reiter Anbieter: Anthropic, OpenAI, OpenRouter und Ollama, je mit Adresse, Key-Status und erlaubten Datenklassen, dazu der Befehl zum Ablegen des Keys; darunter beginnt der Abschnitt „Eigener Endpunkt“](einstellungen-anbieter.png)
+![Einstellungen, Reiter Anbieter: Anthropic, OpenAI, OpenRouter, Ollama und zwei eigene OpenAI-kompatible Anbieter, je mit Adresse, Key-Status und erlaubten Datenklassen, dazu der Befehl zum Ablegen des Keys; darunter beginnt der Abschnitt „Eigener Endpunkt“](einstellungen-anbieter.png)
 
 Im Container der Aufnahme fehlen `docker` und `opencode`, darum meldet die Seite sie als nicht gefunden, und die Befehle für
 den Schlüsselbund sind die für Linux.

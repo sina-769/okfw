@@ -12,7 +12,10 @@ from pathlib import Path
 from .basis import FIGURES_DIR, Page, SKILL_DIR, SOURCE_TYPE, WikiError, _manifest_lesen, as_list, one_line, replace_file
 from .bereinigung import clean_entry, safe_link
 from .konfig import LOG_LABELS
-from .quellen import csl_date, csl_names, csl_year, kurzbeleg
+from .quellen import csl_date, csl_names, csl_year, kurzbeleg, kurzname, kurztitel
+
+# Typen, die APA im Klammerbeleg mit dem Titel nennt, auch wenn ein Autor angegeben ist
+TITEL_ZITIERT = {"legislation", "legal_case", "bill", "regulation", "treaty"}
 
 
 class WikiIndexe:
@@ -225,7 +228,18 @@ class WikiIndexe:
         return changed
 
     def csl_item(self, page: Page) -> dict:
-        """CSL-JSON für eine Quellenkarte: der csl-Block, sonst aus flachen Feldern oder Repo-Angaben abgeleitet."""
+        """CSL-JSON für eine Quellenkarte: der csl-Block, sonst aus flachen Feldern oder Repo-Angaben abgeleitet.
+
+        Wer im Klammerbeleg mit Titel steht (ohne Autor, Rechtsquellen), bekommt einen title-short, wenn keiner da ist.
+        """
+        item = self._csl_basis(page)
+        if not item.get("title-short") and (not item.get("author") or item.get("type") in TITEL_ZITIERT):
+            kurz = kurztitel(str(item.get("title") or ""))
+            if kurz:
+                item["title-short"] = kurz
+        return item
+
+    def _csl_basis(self, page: Page) -> dict:
         fm = page.fm or {}
         field = self.cfg["export"].get("csl", {}).get("field", "csl")
         if isinstance(fm.get(field), dict):
@@ -280,11 +294,13 @@ class WikiIndexe:
         """{Slug: {cite, entry, order}} für alle Quellenkarten; ein einziger pandoc-Aufruf mit APA-7-CSL.
 
         cite ist der Klammerbeleg ohne Klammern ("Sarkar &amp; Drosos, 2025"), entry die Literaturangabe als HTML.
-        Ohne pandoc einfache Ersatzform aus Autor, Jahr, Titel, URL.
+        Organisationen stehen im Beleg mit ihrer Abkürzung (kurzname), Titel als title-short. Ohne pandoc einfache
+        Ersatzform aus Autor, Jahr, Titel, URL.
         """
         if getattr(self, "_apa", None) is not None:
             return self._apa
         items = [self.csl_item(p) for p in self.source_cards()]
+        by_id = {it["id"]: it for it in items}
         spec = self.cfg["export"].get("csl", {})
         style = self.csl_style()
         pandoc = shutil.which("pandoc")
@@ -306,15 +322,21 @@ class WikiIndexe:
             cites = dict(re.findall(r'<div id="cite-([^"]+)">\s*<p><span class="citation"[^>]*>(.*?)</span></p>', out, re.S))
             for order, (key, entry) in enumerate(re.findall(r'<div id="ref-([^"]+)" class="csl-entry"[^>]*>(.*?)</div>', out, re.S)):
                 cite = " ".join(cites.get(key, "").split())
+                for name in by_id.get(key, {}).get("author") or []:
+                    lang = one_line(name.get("literal", "")) if isinstance(name, dict) else ""
+                    if lang and kurzname(lang) != lang:
+                        cite = cite.replace(html.escape(lang, quote=False), html.escape(kurzname(lang), quote=False))
                 catalog[key] = {"cite": clean_entry(cite[1:-1] if cite.startswith("(") and cite.endswith(")") else cite),
                                 "entry": clean_entry(" ".join(entry.split())), "order": order}
         for order, it in enumerate(sorted(items, key=lambda i: i["id"])):
             if it["id"] in catalog:
                 continue
             year = csl_year(it)
-            who = kurzbeleg(it).rsplit(",", 1)[0] if it.get("author") else str(it.get("title", it["id"]))
+            names = kurzbeleg(it).rsplit(",", 1)[0] if it.get("author") else str(it.get("title", it["id"]))
+            who = str(it.get("title-short") or it.get("title") or it["id"]) \
+                if not it.get("author") or it.get("type") in TITEL_ZITIERT else names
             link = str(it.get("URL") or (f"https://doi.org/{it['DOI']}" if it.get("DOI") else ""))
-            entry = f"{html.escape(who)} ({html.escape(year)}). <em>{html.escape(str(it.get('title', '')))}</em>."
+            entry = f"{html.escape(names)} ({html.escape(year)}). <em>{html.escape(str(it.get('title', '')))}</em>."
             if safe_link(link):
                 entry += f' <a href="{html.escape(link)}">{html.escape(link)}</a>'
             elif link:
