@@ -111,6 +111,14 @@ class Abdeckung(unittest.TestCase):
         plugin = json.loads((PLUGIN / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
         self.assertEqual(kern, plugin.rsplit(".", 1)[0])
 
+    def test_claude_code_version_im_nachbau_steht_in_der_doku(self):
+        """`ARG CLAUDE_CODE_VERSION` in tests/Dockerfile und die Zeile „Claude Code“ in docs/entwicklung.md nennen dieselbe Version."""
+        docker = re.search(r"^ARG CLAUDE_CODE_VERSION=(\S+)\s*$", (PLUGIN / "tests/Dockerfile").read_text(encoding="utf-8"), re.M)
+        doku = re.search(r"^\| \[Claude Code\]\([^)]*\) \| ([^|]+?) \|", (PLUGIN / "docs/entwicklung.md").read_text(encoding="utf-8"), re.M)
+        self.assertIsNotNone(docker, "tests/Dockerfile: Zeile ARG CLAUDE_CODE_VERSION=… fehlt")
+        self.assertIsNotNone(doku, "docs/entwicklung.md: Tabellenzeile „Claude Code“ in „Voraussetzungen“ fehlt")
+        self.assertEqual(doku.group(1), docker.group(1), "Claude-Code-Version: docs/entwicklung.md (Tabelle „Voraussetzungen“) und ARG CLAUDE_CODE_VERSION in tests/Dockerfile weichen ab")
+
 
 class Anleitung(unittest.TestCase):
     """Die Anleitung für Agenten (.claude/CLAUDE.md), die Richtungsdatei und der eine Prüfeinstieg bleiben bei dem, was es gibt.
@@ -201,6 +209,22 @@ class Anleitung(unittest.TestCase):
         for titel in ("Plan", "Änderungen", "Abweichungen vom Plan", "Prüfergebnis", "Beteiligte Modelle"):
             with self.subTest(titel=titel):
                 self.assertRegex(vorlage, re.compile(rf"^## {titel}$", re.M))
+
+    def test_beitragsweg_ist_verlinkt_und_seine_pfade_gibt_es(self):
+        """CONTRIBUTING.md ist der eine Ort für den Beitragsweg; README und Entwicklung verweisen darauf, seine Pfade und Links stimmen."""
+        beitrag = self.text("CONTRIBUTING.md")
+        for rel in ("README.md", "docs/entwicklung.md"):
+            with self.subTest(verweis=rel):
+                self.assertIn("CONTRIBUTING.md", self.text(rel))
+        for pfad in self.genannte_pfade(beitrag):
+            with self.subTest(pfad=pfad):
+                self.assertTrue((PLUGIN / pfad).exists(), f"CONTRIBUTING.md nennt {pfad}, den es nicht gibt")
+        for ziel in re.findall(r"\]\(([^)#:]+)(?:#[^)]*)?\)", beitrag):
+            with self.subTest(link=ziel):
+                self.assertTrue((PLUGIN / ziel).exists(), f"CONTRIBUTING.md verlinkt {ziel}, das es nicht gibt")
+        for wort in ("tests/pruefen.sh", "Unveröffentlicht", "docs/richtung.md", "Co-Authored-By", "Reviewed-by", "Tested-by"):
+            with self.subTest(wort=wort):
+                self.assertIn(wort, beitrag)
 
     def test_richtung_klauseln_sind_lueckenlos_und_haben_eine_quelle(self):
         richtung = self.text("docs/richtung.md")

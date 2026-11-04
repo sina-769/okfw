@@ -416,6 +416,24 @@ class Lizenzen(RegelTest):
             ("license_unclassified", self.Q1, "name: MIT", "name: Sonderlizenz XY"),
         ])
 
+    def test_unbekannte_lizenz_je_schreibweise(self):
+        """Je dokumentierter Schreibweise: license_unknown statt license_missing oder license_unclassified."""
+        basis = set(self.lint_codes())
+        for code in ("license_unknown", "license_missing", "license_unclassified"):
+            self.assertNotIn(code, basis, "im sauberen Wiki darf der Code nicht vorkommen")
+        for schreibweise in ("unknown", "Unknown", "unbekannt", "UNBEKANNT", "unklar", "Unklar",
+                            "n/a", "N/A", "none", "None", "keine angabe", "Keine Angabe", "-", "---"):
+            with self.subTest(schreibweise=schreibweise):
+                original = self.text(self.Q1)
+                try:
+                    self.aendere(self.Q1, "name: MIT", f"name: {schreibweise}")
+                    codes = set(self.lint_codes(self.Q1))
+                    self.assertIn("license_unknown", codes)
+                    self.assertNotIn("license_missing", codes)
+                    self.assertNotIn("license_unclassified", codes)
+                finally:
+                    self.schreibe(self.Q1, original)
+
     def test_fehlende_lizenz_eine_meldung_je_profil(self):
         self.aendere(self.Q1, "license: {name: MIT, url: null}\n", "")
         lizenz = lambda: [(f["code"], f["message"]) for f in self.befunde(self.Q1)

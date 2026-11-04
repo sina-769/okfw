@@ -2,6 +2,18 @@
 
 Je Version steht hier nur das Ergebnis der Prüfungen. Protokolle und Berichte hängen als Anhang am Release, die aus der Zeit vor 0.6.0 gesammelt an 0.6.0.
 
+## 0.7.3 · 4.11.2026
+
+Der Beitragsweg steht einmal ganz in `CONTRIBUTING.md`; neue Tests prüfen `license_unknown` je Schreibweise und dieselbe Claude-Code-Version in Nachbau und Doku. Kern, Hooks und Profile bleiben wie in 0.7.2, darum meldet `okfw --version` weiter 0.7.2.
+
+Geprüft: alle Testsuiten, Diff seit 0.7.2 mit dem Angreifermodell, die Prüfungen vor dem Export. Nicht geprüft im Release-Lauf: Nachbau nicht wiederholt, Kern, Hooks und Profile unverändert seit 0.7.2; Screenshots nicht neu aufgenommen, Bilder unverändert seit 0.7.2. Exportiert vom Zweig `release-0.7.3`; die Merges nach `main` im Arbeitsrepo standen beim Export noch aus.
+
+Die Release-Schritte nennen jetzt, dass die Tests bei jedem Pull Request und bei jedem Push auf `main` laufen. Neu: `CONTRIBUTING.md` beschreibt den Beitragsweg einmal ganz (öffentlicher PR, Übernahme ins Arbeitsrepo, Rückkehr mit der nächsten Version); der Abschnitt „Beiträge“ in `docs/entwicklung.md` verweist nur noch darauf.
+
+Tests in `tests/test_regeln.py` zeigen je dokumentierter Schreibweise (unknown, unbekannt, unklar, n/a, none, keine Angabe, nur Striche; Groß-/Kleinschreibung egal), dass eine Quellenkarte mit unbekanntem `license.name` `license_unknown` erhält, nicht `license_missing` oder `license_unclassified`.
+
+Ein Test in `tests/test_abdeckung.py` prüft, dass `ARG CLAUDE_CODE_VERSION` in `tests/Dockerfile` und die Zeile „Claude Code“ der Tabelle „Voraussetzungen“ in `docs/entwicklung.md` dieselbe Version nennen; der Abschnitt „Nachbau-Test“ sagt, dass beide im selben Commit geändert werden.
+
 ## 0.7.2 · 3.11.2026
 
 Rasterbilder als WebP, auf Wunsch von einem Bildmodell erzeugt, auch aus dem Dashboard; Klammerbelege als Kurzzitate nach APA 7; das Repo ist für Coding-Agenten vorbereitet. Hooks und Profile bleiben wie in 0.7.1.

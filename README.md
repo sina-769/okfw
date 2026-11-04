@@ -53,6 +53,7 @@ uv run --no-config --quiet "$OKF" serve
 - [Rundgang](docs/rundgang.md): alle Funktionen mit Bildern, Modelle und Anbieter, Freigabe, Arbeit von Hand.
 - [Konfiguration](skills/okfw/docs/konfiguration.md): alle Befehle und `wiki.toml`-Schlüssel.
 - [Entwicklung](docs/entwicklung.md): Voraussetzungen, Installation ohne Marketplace, Tests, Nachbau, Release.
+- [Mitarbeiten](CONTRIBUTING.md): wohin ein Pull Request geht, was er braucht und wie er zurückkommt.
 - [CHANGELOG.md](CHANGELOG.md): was sich je Version ändert.
 
 ## Lizenz und Dank

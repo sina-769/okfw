@@ -68,6 +68,8 @@ docker build -t okfw-nachbau -f tests/Dockerfile tests
 docker run --rm -v "$PWD:/src:ro" -v "$PWD/.nachbau:/out" okfw-nachbau /src /out/lauf-$(date +%H%M%S)
 ```
 
+Die Claude-Code-Version im Nachbau-Image steht als `ARG CLAUDE_CODE_VERSION` in `tests/Dockerfile`. Wer sie ändert, ändert im selben Commit die Zeile „Claude Code“ in der Tabelle [Voraussetzungen](#voraussetzungen). `tests/test_abdeckung.py` prüft, dass beide dieselbe Version nennen.
+
 Mit `-e CLAUDE_CODE_OAUTH_TOKEN` (Token aus `claude setup-token`) läuft zusätzlich eine echte
 Claude-Sitzung, die an den Schreibschutz stößt. Für einen Release gehört sie dazu: Ohne Token steht der Schritt als übersprungen
 im Protokoll, und das Protokoll trägt den Vermerk „Unvollständig“.
@@ -76,14 +78,11 @@ Die Protokolle hängen an den Releases.
 
 ## Beiträge
 
-Pull Requests gehen gegen `main` des öffentlichen Repos; `tests/pruefen.sh` sollte vorher grün sein. Dort liegt nur, was veröffentlicht ist:
-Jede Version entsteht in einem Arbeitsrepo und kommt nach den Release-Schritten als ein Commit dorthin. Ein angenommener Beitrag wird darum
-nicht dort gemergt, sondern ins Arbeitsrepo übernommen, mit dir als Autor, und kommt mit der nächsten Version zurück; deren Commit nennt dich
-als Co-Autor. Fragen und Vorschläge ohne Code gehen als Issue.
+Wie ein Beitrag ankommt und warum er nicht im öffentlichen Repo gemergt wird, steht in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Release-Schritte
 
-Die Tests laufen bei jedem Pull Request auf GitHub ([.github/workflows/tests.yml](../.github/workflows/tests.yml)). Vor
+Die Tests laufen bei jedem Pull Request und bei jedem Push auf `main` auf GitHub ([.github/workflows/tests.yml](../.github/workflows/tests.yml)). Vor
 jeder Version:
 
 1. **Prüfen:** `tests/pruefen.sh` und die Tests der Anwendungen auf der
